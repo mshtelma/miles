@@ -1,6 +1,4 @@
-import json
 from argparse import Namespace
-from pathlib import Path
 
 LORA_ADAPTER_NAME = "miles_lora"
 
@@ -36,9 +34,9 @@ def lora_base_cpu_backup_enabled(args: Namespace) -> bool:
 
 def save_adapter_to_disk(out_dir, config: dict, tensors: dict) -> None:
     """Write a LoRA adapter dir (adapter_config.json + adapter_model.safetensors)."""
-    import safetensors.torch  # lazy: this module is imported on paths that never touch weights
+    from miles.backends.training_utils.artifact_io import ArtifactStore
 
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "adapter_config.json").write_text(json.dumps(config, indent=2))
-    safetensors.torch.save_file(tensors, str(out / "adapter_model.safetensors"))
+    store = ArtifactStore()
+    out = store.ensure_dir(out_dir)
+    store.atomic_write_json(out / "adapter_config.json", config)
+    store.write_safetensors_shard(out / "adapter_model.safetensors", tensors)

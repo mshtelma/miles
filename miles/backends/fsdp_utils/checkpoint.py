@@ -12,6 +12,8 @@ import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
 from torch.distributed.checkpoint.stateful import Stateful
 
+from miles.backends.training_utils.artifact_io import ArtifactStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,9 +72,7 @@ def _read_checkpoint_metadata(path: Path) -> dict[str, Any]:
 
 
 def _write_checkpoint_metadata(path: Path, metadata: dict[str, Any]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
-    tmp_path.replace(path)
+    ArtifactStore().atomic_write_json(path, metadata, sort_keys=True)
 
 
 def load(actor: Any) -> dict[str, Any] | None:
@@ -201,13 +201,17 @@ def save(actor: Any, iteration: int) -> None:
     model_dir = checkpoint_dir / "model"
     optimizer_dir = checkpoint_dir / "optimizer"
     lr_scheduler_dir = checkpoint_dir / "lr_scheduler"
+    store = ArtifactStore()
 
-    if dist.get_rank() == 0:
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        model_dir.mkdir(parents=True, exist_ok=True)
-        optimizer_dir.mkdir(parents=True, exist_ok=True)
-        lr_scheduler_dir.mkdir(parents=True, exist_ok=True)
-    dist.barrier()
+    def prepare_dirs() -> None:
+        if store.is_publisher:
+            store.ensure_dir(checkpoint_dir)
+            store.ensure_dir(model_dir)
+            store.ensure_dir(optimizer_dir)
+            store.ensure_dir(lr_scheduler_dir)
+
+    store.run_local_phase("fsdp.checkpoint.prepare", prepare_dirs)
+    store.wait_for_all()
 
     # Save model weights
     model_state = ModelState(actor.model)
@@ -227,10 +231,12 @@ def save(actor: Any, iteration: int) -> None:
         lr_scheduler_state_dict = {"lr_scheduler_state": lr_scheduler_state}
         dcp.save(lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir))
 
-    if dist.get_rank() == 0:
+    def finalize_checkpoint() -> None:
+        if not store.is_publisher:
+            return
         rng_state = {"torch": torch.get_rng_state()}
         rng_state["cuda"] = torch.cuda.get_rng_state_all()
-        torch.save(rng_state, checkpoint_dir / "rng.pt")
+        store.atomic_torch_save(checkpoint_dir / "rng.pt", rng_state)
 
         metadata = {
             "iteration": step_id,
@@ -244,7 +250,8 @@ def save(actor: Any, iteration: int) -> None:
         _write_checkpoint_metadata(checkpoint_dir / "meta.json", metadata)
 
         tracker_file = base_dir / "latest_checkpointed_iteration.txt"
-        tracker_file.write_text(str(step_id))
+        store.write_tracker(tracker_file, step_id)
         logger.info(f"[FSDP] Saved checkpoint to {checkpoint_dir}")
 
-    dist.barrier()
+    store.run_local_phase("fsdp.checkpoint.finalize", finalize_checkpoint)
+    store.wait_for_all()
