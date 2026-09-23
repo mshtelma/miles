@@ -73,10 +73,11 @@ def harbor_env_vars(args) -> dict[str, str]:
         "HARBOR_TRIALS_DIR": args.harbor_trials_dir,
         "AGENT_MODEL_NAME": args.agent_model_name,
         "AGENT_TIMEOUT": str(args.agent_timeout),
-        "MILES_ROUTER_EXTERNAL_HOST": args.router_external_host,
     }
     if args.harbor_env_kwargs:
         env["HARBOR_ENV_KWARGS"] = args.harbor_env_kwargs
+    if args.node_external_ip:
+        env["MILES_NODE_EXTERNAL_IP"] = args.node_external_ip
     if spec := PROVIDER_CREDENTIALS.get(env_type):
         provision_provider(env, spec, arg_path=getattr(args, spec["arg_attr"], "") or "")
     else:

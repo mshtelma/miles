@@ -52,7 +52,8 @@ async def wait_session_server_ready(args):
     # OpenAIEndpointTracer.create picks each session's instance from this list.
     args.session_server_instances = [
         SessionServerInstance(
-            addr=f"{addr.host}:{addr.port}",
+            addr=addr.netloc,
+            external_addr=addr.external_netloc,
             instance_id=compute_session_server_instance_id(args, instance_index),
         )
         for instance_index, addr in enumerate(addrs)
@@ -62,5 +63,6 @@ async def wait_session_server_ready(args):
         await wait_tcp_ready_async(addr.host, addr.port, timeout=_SERVER_READY_TIMEOUT_SECS)
     logger.info(
         f"Session servers ready at {[instance.addr for instance in args.session_server_instances]} "
-        f"({len(addrs)} instances)"
+        f"({len(addrs)} instances), "
+        f"externally at {[instance.external_addr for instance in args.session_server_instances]}"
     )

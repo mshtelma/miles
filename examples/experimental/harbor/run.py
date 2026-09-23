@@ -10,7 +10,6 @@ from that example (generate.py), which this launcher puts on PYTHONPATH.
 """
 
 import os
-import socket
 import subprocess
 import time
 from dataclasses import dataclass
@@ -60,7 +59,10 @@ class ScriptArgs(U.ExecuteTrainConfig):
     e2b_api_key_file: str = os.environ.get("E2B_API_KEY_FILE", "")
     modal_config_file: str = os.environ.get("MODAL_CONFIG_PATH", "")
 
-    router_external_host: str = os.environ.get("MILES_ROUTER_EXTERNAL_HOST", socket.gethostname())
+    # This is set as MILES_NODE_EXTERNAL_IP on every node, so it is only right while the session
+    # servers share a host. The default is not read from that variable: in the launcher's environment
+    # it holds this node's own address, and forwarding it would overwrite every other node's.
+    node_external_ip: str = ""
     miles_host_ip: str = os.environ.get("MILES_HOST_IP", "")
 
     # W&B settings

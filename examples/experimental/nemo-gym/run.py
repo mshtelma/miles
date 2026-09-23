@@ -52,10 +52,12 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
     # NeMo Gym settings
     nemo_gym_url: str = os.environ.get("NEMO_GYM_URL", "http://localhost:12000")
-    # Trainer address reachable from the NeMo Gym host; only needed when that
-    # host cannot resolve the trainer's hostname (e.g. it dials back over a
-    # tailnet).
-    router_external_host: str = os.environ.get("MILES_ROUTER_EXTERNAL_HOST", "")
+    # The trainer address the NeMo Gym host reaches, needed only when that host cannot resolve the
+    # trainer's hostname (e.g. it dials back over a tailnet). It is set as MILES_NODE_EXTERNAL_IP on
+    # every node, so it is only right while the session servers share a host. The default is not read
+    # from that variable: in the launcher's environment it holds this node's own address, and
+    # forwarding it would overwrite every other node's.
+    node_external_ip: str = ""
 
 
 def cleanup():
@@ -183,8 +185,8 @@ def execute(args: ScriptArgs):
         "PYTHONPATH": f"{args.megatron_path}:{SCRIPT_DIR}:{U.repo_base_dir}",
         "NEMO_GYM_URL": args.nemo_gym_url,
     }
-    if args.router_external_host:
-        extra_env_vars["MILES_ROUTER_EXTERNAL_HOST"] = args.router_external_host
+    if args.node_external_ip:
+        extra_env_vars["MILES_NODE_EXTERNAL_IP"] = args.node_external_ip
 
     U.execute_train(
         train_args=train_args,
