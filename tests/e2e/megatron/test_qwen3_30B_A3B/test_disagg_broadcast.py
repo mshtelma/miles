@@ -21,8 +21,9 @@ CASE = CaseConfig(
     use_int4_rollout=False,
     use_bridge=False,
     use_r3=False,
-    # 3 train + 1 rollout: PP3 broadcast from three senders, with VPP2 (8 layers per virtual
-    # chunk) so each sender holds non-contiguous layer ranges.
+    # 3 train + 1 rollout: PP3 broadcast from three senders with VPP2 (8 layers per virtual chunk).
+    # VPP rounds each step's micro-batch count up to a multiple of PP; 16k tokens packs two ~8k
+    # samples per micro-batch so a 32-sample step can reach that multiple.
     num_gpus_per_node=3,
     cp_size=1,
     pp_size=3,
@@ -32,6 +33,7 @@ CASE = CaseConfig(
     rollout_num_gpus=1,
     rollout_num_gpus_per_engine=1,
     update_weight_transfer_mode="broadcast",
+    max_tokens_per_gpu=16384,
     extra_args="--num-layers-per-virtual-pipeline-stage 8 ",
 )
 
