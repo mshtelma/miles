@@ -17,9 +17,11 @@ class CaseConfig:
     tp_size: int
     ep_size: int
     rollout_num_gpus_per_engine: int
+    etp_size: int = 1
     sglang_ep_size: int = None
     sglang_dp_size: int = None
     sglang_enable_dp_attention: bool = False
+    sglang_max_running_requests: int = 512
     use_deepep: bool = False
     use_fp8_rollout: bool = False
     use_int4_rollout: bool = False
@@ -134,7 +136,7 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
         f"--pipeline-model-parallel-size {case.pp_size} "
         f"--context-parallel-size {case.cp_size} "
         f"--expert-model-parallel-size {case.ep_size} "
-        "--expert-tensor-parallel-size 1 "
+        f"--expert-tensor-parallel-size {case.etp_size} "
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
@@ -176,12 +178,16 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
     sglang_args = (
         f"--rollout-num-gpus-per-engine {case.rollout_num_gpus_per_engine} "
         "--sglang-mem-fraction-static 0.7 "
-        "--sglang-max-running-requests 512 "
+        f"--sglang-max-running-requests {case.sglang_max_running_requests} "
         "--sglang-enable-metrics "
     )
 
     if case.use_deepep:
         sglang_args += "--sglang-moe-a2a-backend deepep --sglang-deepep-mode auto "
+        if not (case.use_fp8_rollout or case.use_int4_rollout):
+            # SGLang has DeepEP MoE kernels for BF16 experts only on the DeepGEMM runner
+            # (FP8 already resolves auto to DeepGEMM).
+            sglang_args += "--sglang-moe-runner-backend deep_gemm "
     if case.sglang_ep_size is not None:
         sglang_args += f"--sglang-expert-parallel-size {case.sglang_ep_size} "
     if case.sglang_dp_size is not None:
