@@ -24,6 +24,9 @@ CASE = CaseConfig(
     ep_size=4,
     # SGLang DeepEP forces EP to the engine TP.
     sglang_ep_size=4,
+    # The 8x H200 runners cannot bring NVSHMEM up over IB (ibv_modify_qp: ENODEV), which DeepEP
+    # low-latency mode needs; normal mode stays on NVLink (and turns SGLang CUDA graphs off).
+    sglang_deepep_mode="normal",
     # GLM-4.7-Flash has 20 attention heads; non-EP SGLang TP must divide it.
     rollout_num_gpus_per_engine=4,
 )
