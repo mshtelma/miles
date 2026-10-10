@@ -252,6 +252,13 @@ class _RecordingRolloutFn(BaseRolloutFn):
         self._log.append((self._name, "load", rollout_id))
 
 
+class _SourceSavingRolloutFn(_RecordingRolloutFn):
+    """Like the fully-async rollout function, which saves the data source on its producer's loop."""
+
+    def save_with_data_source(self, rollout_id: int) -> None:
+        self._log.append((self._name, "save_with_data_source", rollout_id))
+
+
 class _RecordingEventLoggerCheckpoint:
     def __init__(self) -> None:
         self.restored: list = []
@@ -318,6 +325,27 @@ class TestCheckpointing:
 
         executor.data_source.save.assert_called_once_with(5)
         assert ("train", "save", 5) in calls
+
+    async def test_a_rollout_fn_that_owns_the_source_save_replaces_the_direct_one(
+        self,
+        ray_local_mode,
+        patch_low_level,
+        monkeypatch,
+    ):
+        """A fully-async producer draws from the source during the save, so its rollout function saves the source."""
+        import miles.ray.rollout.rollout_executor as rexec
+
+        monkeypatch.setattr(rexec, "event_logger_checkpoint", MagicMock())
+        executor = _make_executor(_make_test_args(rollout_global_dataset=True))
+        executor.use_legacy_rollout_v1 = False
+        calls: list[tuple[str, str, object]] = []
+        executor.generate_rollout = executor.eval_generate_rollout = _SourceSavingRolloutFn("train", calls)
+        executor.data_source = MagicMock()
+
+        executor.save(rollout_id=4)
+
+        executor.data_source.save.assert_not_called()
+        assert calls == [("train", "save_with_data_source", 4), ("train", "save", 4)]
 
     async def test_save_forwards_to_the_data_source_without_a_global_dataset(
         self,

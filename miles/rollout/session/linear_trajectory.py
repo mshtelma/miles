@@ -7,7 +7,7 @@ from typing import Any
 
 from miles.rollout.session.config import SessionServerConfig
 from miles.rollout.session.errors import MessageValidationError, SessionNotFoundError, TokenizationError
-from miles.rollout.session.request_args import PreparedChatRequest, prepare_chat_request
+from miles.rollout.session.request_args import PreparedChatRequest, fit_completion_to_context, prepare_chat_request
 from miles.rollout.session.types import SessionRecord
 from miles.utils.chat_template_utils.message_matcher_hub import (
     SessionMessageMatcher,
@@ -91,6 +91,7 @@ class LinearTrajectory:
     evaluation: bool = False
     sampling_defaults: dict[str, Any] = field(default_factory=dict)
     sampling_support_replay: bool = False
+    max_seq_len: int | None = None
 
     @property
     def turn_args(self) -> dict[str, Any]:
@@ -145,6 +146,8 @@ class LinearTrajectory:
             tito_tokenizer=tito_tokenizer,
             message_matcher=matcher,
         )
+        limits = [limit for limit in (self.max_seq_len, config.rollout_max_context_len) if limit is not None]
+        fit_completion_to_context(prepared.body, context_limit=min(limits) if limits else None)
         self._rollback_to_checkpoint(checkpoint_index)
         return prepared
 
@@ -390,12 +393,14 @@ class SessionRegistry:
         evaluation: bool = False,
         sampling_defaults: dict[str, Any] | None = None,
         sampling_support_replay: bool = False,
+        max_seq_len: int | None = None,
     ) -> str:
         session_id = uuid.uuid4().hex
         self.sessions[session_id] = LinearTrajectory(
             evaluation=evaluation,
             sampling_defaults=dict(sampling_defaults or {}),
             sampling_support_replay=sampling_support_replay,
+            max_seq_len=max_seq_len,
         )
         return session_id
 

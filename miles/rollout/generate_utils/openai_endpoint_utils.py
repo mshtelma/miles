@@ -22,6 +22,9 @@ from miles.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 _SESSION_REQUEST_TIMEOUT = 120
+# Assembling a long session (150K tokens with its routing replay) waits behind other sessions'
+# work on a busy session server; at 120 s the longest episodes were the ones dropped.
+SESSION_COLLECT_TIMEOUT = 900
 
 
 class OpenAIEndpointTracer:
@@ -63,7 +66,9 @@ class OpenAIEndpointTracer:
         session_params = {
             key: value for key, value in (sampling_params or {}).items() if key in CreateSessionRequest.model_fields
         }
-        body = CreateSessionRequest.model_validate({**session_params, "evaluation": evaluation})
+        body = CreateSessionRequest.model_validate(
+            {**session_params, "evaluation": evaluation, "max_seq_len": getattr(args, "max_seq_len", None)}
+        )
         use_v2 = getattr(args, "use_session_server", None) == "v2"
         samples_wire_fields = COMPUTED_FIELDS_V2 if use_v2 else COMPUTED_FIELDS
         if should_return_sampling_mask(args, sampling_params, evaluation=evaluation):
@@ -89,14 +94,11 @@ class OpenAIEndpointTracer:
             payload = await post_bytes_no_retry(
                 f"{self.base_url}/samples",
                 body,
-                timeout=_SESSION_REQUEST_TIMEOUT,
+                timeout=SESSION_COLLECT_TIMEOUT,
             )
         finally:
             try:
-                await asyncio.wait_for(
-                    post(self.base_url, {}, action="delete"),
-                    timeout=_SESSION_REQUEST_TIMEOUT,
-                )
+                await self.delete_session()
             except Exception as e:
                 logger.warning(f"Failed to delete session {self.session_id} after collecting samples: {e}")
 
@@ -106,3 +108,7 @@ class OpenAIEndpointTracer:
             input_sample,
             fields=self.samples_wire_fields,
         )
+
+    async def delete_session(self, *, timeout: float = _SESSION_REQUEST_TIMEOUT) -> None:
+        """Bound cleanup for cancelled agents that should skip sample decoding."""
+        await asyncio.wait_for(post(self.base_url, {}, action="delete"), timeout=timeout)

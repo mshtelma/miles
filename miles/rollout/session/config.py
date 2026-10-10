@@ -28,12 +28,16 @@ class SessionServerConfig(FrozenStrictBaseModel):
     pause_generation_mode: str | None
     session_sample_picker_path: str | None
     session_sample_postprocessor_path: str | None
+    rollout_max_context_len: int | None
+    session_addition_r3_on_retract: bool
+    session_capture_provenance: bool
 
 
 def compute_session_server_config(
     args, *, host: str, port: int, instance_id: str | None, backend_url: str
 ) -> SessionServerConfig:
     return SessionServerConfig(
+        rollout_max_context_len=getattr(args, "rollout_max_context_len", None),
         host=host,
         port=port,
         instance_id=instance_id,
@@ -58,4 +62,6 @@ def compute_session_server_config(
         pause_generation_mode=getattr(args, "pause_generation_mode", None),
         session_sample_picker_path=getattr(args, "session_sample_picker_path", None),
         session_sample_postprocessor_path=getattr(args, "session_sample_postprocessor_path", None),
+        session_addition_r3_on_retract=getattr(args, "session_addition_r3_on_retract", False),
+        session_capture_provenance=getattr(args, "session_capture_provenance", False),
     )

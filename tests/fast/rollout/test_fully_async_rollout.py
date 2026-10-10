@@ -3,6 +3,7 @@ from tests.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=60, suite="stage-a-cpu", labels=[])
 
 import asyncio
+import threading
 from argparse import Namespace
 from collections import deque
 from collections.abc import Callable
@@ -123,6 +124,57 @@ async def test_drain_collects_batch_sorted_with_metrics(monkeypatch):
     assert len(output2.samples) == 3
 
 
+class ObservingDataSource(FakeDataSource):
+    """Keeps even group indices out of training, as a source issuing eval probes would."""
+
+    def __init__(self):
+        super().__init__()
+        self.observed = []
+
+    def on_group_finished(self, group):
+        self.observed.append(group[0].group_index)
+        return group[0].group_index % 2 == 0
+
+    def rollout_metrics(self):
+        return {"source/observed": len(self.observed)}
+
+
+async def test_the_source_sees_every_finished_group_and_may_keep_it_from_training(monkeypatch):
+    source = ObservingDataSource()
+    fn = make_fn(monkeypatch, make_args(rollout_batch_size=3), source)
+
+    output = await fn(RolloutFnTrainInput(rollout_id=0))
+
+    trained = [group[0].group_index for group in output.samples]
+    assert len(trained) == 3 and all(index % 2 for index in trained)
+    assert set(trained) < set(source.observed)
+    assert output.metrics["source/observed"] == len(source.observed) >= 6
+
+
+class SavingDataSource(FakeDataSource):
+    def __init__(self):
+        super().__init__()
+        self.saved = []
+
+    def save(self, rollout_id):
+        self.saved.append((rollout_id, threading.get_ident()))
+
+
+async def test_the_data_source_saves_on_the_producer_loop(monkeypatch):
+    """The rollout actor saves from its own thread; the save must not interleave with the producer."""
+    source = SavingDataSource()
+    fn = make_fn(monkeypatch, make_args(), source)
+    fn.save_with_data_source(0)  # before the producer starts, the save runs in place
+    await fn(RolloutFnTrainInput(rollout_id=0))
+    producer_thread = threading.get_ident()
+
+    await asyncio.to_thread(fn.save_with_data_source, 1)
+    fn.save_with_data_source(2)  # already on the producer loop: no hand-off, no deadlock
+
+    assert [rollout_id for rollout_id, _ in source.saved] == [0, 1, 2]
+    assert all(thread == producer_thread for _, thread in source.saved)
+
+
 async def test_eval_without_fleet_pauses_producer(monkeypatch):
     """Shared-engine eval: producer submissions pause during eval and resume after."""
     release = asyncio.Event()
@@ -219,12 +271,17 @@ async def test_missing_reward_group_dropped_without_recycling(monkeypatch):
     missing_reward = make_group(1)
     missing_reward[0].reward = None
     data_source = FakeDataSource(scripted=[missing_reward])
-    args = make_args(rollout_batch_size=1, async_unused_samples_handler="retry")
+    args = make_args(
+        rollout_batch_size=1,
+        async_unused_samples_handler="retry",
+        async_max_prompt_attempts=2,
+    )
     fn = make_fn(monkeypatch, args, data_source)
 
     output = await fn(RolloutFnTrainInput(rollout_id=0))
 
     assert data_source.recycled == []
+    assert 1 not in fn._retry_counts
     assert output.samples[0][0].group_index != 1
     assert output.metrics["rollout/dynamic_filter/drop_group_has_missing_reward"] == 1
 
@@ -262,11 +319,16 @@ async def test_stale_group_recycled(monkeypatch):
 async def test_stale_group_dropped_by_default(monkeypatch):
     stale = make_group(1, weight_versions=["5"])
     data_source = FakeDataSource(scripted=[stale])
-    fn = make_fn(monkeypatch, make_args(rollout_batch_size=1, max_weight_staleness=2), data_source)
+    fn = make_fn(
+        monkeypatch,
+        make_args(rollout_batch_size=1, max_weight_staleness=2, async_max_prompt_attempts=2),
+        data_source,
+    )
 
     output = await fn(RolloutFnTrainInput(rollout_id=0, weight_version=10))
 
     assert data_source.recycled == []
+    assert 1 not in fn._retry_counts
     assert output.metrics["rollout/fully_async/stale_groups_filtered"] == 1
 
 
@@ -318,6 +380,7 @@ async def test_sample_cancellation_aborts_group_without_stopping_worker(
         rollout_batch_size=1,
         async_max_concurrent_samples=N_SAMPLES_PER_PROMPT,
         async_unused_samples_handler=handler,
+        async_max_prompt_attempts=2,
         rollout_submission_granularity=granularity,
         group_rm=False,
     )
@@ -338,6 +401,7 @@ async def test_sample_cancellation_aborts_group_without_stopping_worker(
         assert all(sample.response == "" and sample.weight_versions == [] for sample in prompt_group)
     else:
         assert data_source.recycled == []
+        assert 1 not in fn._retry_counts
         assert all(sample.status == Sample.Status.COMPLETED for sample in prompt_group)
 
     # The producer remains usable after the affected batch, not just until the
@@ -476,6 +540,7 @@ async def test_dynamic_filter_drops_group_without_recycling(monkeypatch):
         rollout_batch_size=1,
         dynamic_sampling_filter_path=f"{__name__}.reject_group_1",
         async_unused_samples_handler="retry",
+        async_max_prompt_attempts=2,
     )
     fn = make_fn(monkeypatch, args, data_source)
 
@@ -485,6 +550,7 @@ async def test_dynamic_filter_drops_group_without_recycling(monkeypatch):
     assert output.samples[0][0].group_index != 1
     # Dropped even with handler="retry": filter rejections bypass the unused handler.
     assert data_source.recycled == []
+    assert 1 not in fn._retry_counts
     assert output.metrics["rollout/dynamic_filter/drop_rejected"] == 1
 
 
@@ -513,7 +579,72 @@ async def test_staleness_filter_off_before_the_first_weight_update(monkeypatch):
 
     assert data_source.recycled == []
     assert output.samples[0][0].group_index == 1
-    assert "rollout/fully_async/max_staleness" not in output.metrics
+
+
+async def test_bounded_retry_exhaustion_quarantines_a_poison_prompt(monkeypatch):
+    class RecyclingSource(FakeDataSource):
+        def add_samples(self, groups):
+            self.recycled.extend(groups)
+            for group in reversed(groups):
+                self.scripted.appendleft(group)
+
+    source = RecyclingSource(scripted=[make_group(1)])
+    attempts = 0
+
+    async def generate(state, group, sampling_params, evaluation=False, sample_done_callback=None):
+        nonlocal attempts
+        if group[0].group_index == 1:
+            attempts += 1
+            return [replace(sample, status=Sample.Status.ABORTED) for sample in group]
+        return group
+
+    args = make_args(
+        rollout_batch_size=1,
+        async_max_concurrent_samples=N_SAMPLES_PER_PROMPT,
+        async_unused_samples_handler="retry",
+        async_max_prompt_attempts=2,
+        async_retry_backoff_s=0.0,
+        async_no_progress_timeout_s=1.0,
+    )
+    fn = make_fn(monkeypatch, args, source, generate=generate)
+    try:
+        output = await asyncio.wait_for(fn(RolloutFnTrainInput(rollout_id=0)), timeout=2)
+    finally:
+        fn._worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await fn._worker
+
+    assert attempts == 2
+    assert output.samples[0][0].group_index != 1
+    assert output.metrics["rollout/fully_async/retry_exhausted"] == 1
+    assert len(source.recycled) == 1
+    assert 1 not in fn._retry_counts
+
+
+async def test_bounded_no_progress_deadline_when_every_group_aborts(monkeypatch):
+    async def generate(state, group, sampling_params, evaluation=False, sample_done_callback=None):
+        await asyncio.sleep(0.005)
+        return [replace(sample, status=Sample.Status.ABORTED) for sample in group]
+
+    args = make_args(
+        rollout_batch_size=1,
+        async_max_concurrent_samples=N_SAMPLES_PER_PROMPT,
+        async_unused_samples_handler="retry",
+        async_max_prompt_attempts=1,
+        async_retry_backoff_s=0.0,
+        async_no_progress_timeout_s=0.05,
+    )
+    fn = make_fn(monkeypatch, args, FakeDataSource(), generate=generate)
+    try:
+        with pytest.raises(TimeoutError, match="no accepted-group progress"):
+            await asyncio.wait_for(fn(RolloutFnTrainInput(rollout_id=0)), timeout=2)
+    finally:
+        fn._worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await fn._worker
+
+    assert fn._retries_exhausted > 0
+    assert len(fn._retry_counts) <= 1
 
 
 # ── DataBuffer: staleness-bounded buffering ─────────────────────────

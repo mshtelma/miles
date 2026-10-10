@@ -34,6 +34,13 @@ class MessageValidationError(SessionError):
     status_code: int = 400
 
 
+class ContextBudgetExhausted(SessionError):
+    """Exact TITO input leaves no room for another generated token."""
+
+    status_code: int = 422
+    code: str = "context_budget_exhausted"
+
+
 class TruncatedGenerationError(SessionError):
     """Raised when a request extends a generation that ended with
     finish_reason='length'; only the v2 tree server raises it (v1 never

@@ -29,6 +29,9 @@ _ARGS_TO_CONFIG_FIELD = {
     "pause_generation_mode": "pause_generation_mode",
     "session_sample_picker_path": "session_sample_picker_path",
     "session_sample_postprocessor_path": "session_sample_postprocessor_path",
+    "rollout_max_context_len": "rollout_max_context_len",
+    "session_addition_r3_on_retract": "session_addition_r3_on_retract",
+    "session_capture_provenance": "session_capture_provenance",
 }
 
 _CALL_SITE_FIELDS = ("host", "port", "instance_id", "backend_url")
@@ -39,6 +42,7 @@ _OPTIONAL_ARGS_ATTRS = (
     "use_session_server",
     "session_sample_picker_path",
     "session_sample_postprocessor_path",
+    "rollout_max_context_len",
 )
 
 _DISTINCT_ARGS_VALUES = dict(
@@ -62,6 +66,9 @@ _DISTINCT_ARGS_VALUES = dict(
     pause_generation_mode="in_place",
     session_sample_picker_path="fake.picker",
     session_sample_postprocessor_path="fake.postprocessor",
+    rollout_max_context_len=131_072,
+    session_addition_r3_on_retract=True,
+    session_capture_provenance=True,
 )
 
 
@@ -141,6 +148,9 @@ _COMPLETE_CONFIG_KWARGS = dict(
     pause_generation_mode=None,
     session_sample_picker_path=None,
     session_sample_postprocessor_path=None,
+    rollout_max_context_len=None,
+    session_addition_r3_on_retract=False,
+    session_capture_provenance=False,
 )
 
 

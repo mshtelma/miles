@@ -318,6 +318,14 @@ async def wait_http_ok(url: str, *, json_payload=None, timeout: float = 180.0, r
             await asyncio.sleep(5)
 
 
+class HTTPResponseError(RuntimeError):
+    """A non-success response from a one-shot HTTP request."""
+
+    def __init__(self, url: str, status_code: int, body: str):
+        super().__init__(f"POST {url} failed with {status_code}: {body}")
+        self.status_code = status_code
+
+
 async def post_bytes_no_retry(url: str, payload: dict, *, timeout: float) -> bytes:
     """Perform one raw-bytes POST with a total timeout."""
     assert _http_client is not None, "init_http_client() must run before post_bytes_no_retry()"
@@ -325,7 +333,7 @@ async def post_bytes_no_retry(url: str, payload: dict, *, timeout: float) -> byt
     async def _do() -> bytes:
         response = await _http_client.post(url, json=payload)
         if not (200 <= response.status_code < 300):
-            raise RuntimeError(f"POST {url} failed with {response.status_code}: {response.text}")
+            raise HTTPResponseError(url, response.status_code, response.text)
         return response.content
 
     return await asyncio.wait_for(_do(), timeout=timeout)

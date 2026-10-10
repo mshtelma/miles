@@ -5,6 +5,7 @@ from miles.utils.pydantic_utils import StrictBaseModel
 
 class CreateSessionRequest(StrictBaseModel):
     evaluation: StrictBool = False
+    max_seq_len: StrictInt | None = Field(default=None, gt=0)
     # the caller resolves rollout/eval/dataset values; the session only fills fields a request omits
     temperature: StrictFloat | None = None
     top_p: StrictFloat | None = None

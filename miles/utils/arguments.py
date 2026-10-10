@@ -791,6 +791,24 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--async-max-prompt-attempts",
+                type=int,
+                default=None,
+                help="Maximum generation attempts per prompt group when unused samples are retried; None is unlimited.",
+            )
+            parser.add_argument(
+                "--async-retry-backoff-s",
+                type=float,
+                default=0.0,
+                help="Base delay before retrying an unused prompt group, doubled after each failed attempt (capped at 30s).",
+            )
+            parser.add_argument(
+                "--async-no-progress-timeout-s",
+                type=float,
+                default=None,
+                help="Fail a fully async training batch when no accepted group arrives within this many seconds.",
+            )
+            parser.add_argument(
                 "--custom-async-data-buffer-path",
                 type=str,
                 default=None,
@@ -2468,6 +2486,18 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 "Instance i listens on this port plus i. Defaults to a dynamically allocated port.",
             )
             parser.add_argument(
+                "--session-addition-r3-on-retract",
+                action="store_true",
+                help="Request only appended routing rows even when retract can recompute the prefix. "
+                "Use only when the sampled prefix is checked before training.",
+            )
+            parser.add_argument(
+                "--session-capture-provenance",
+                action="store_true",
+                help="Record which turns a collected agent sample retains, and whether the agent's scored "
+                "final answer survived truncation (metadata reward_valid_for_retained_tokens). v1 server only.",
+            )
+            parser.add_argument(
                 "--tito-model",
                 type=str,
                 default="default",
@@ -2836,6 +2866,9 @@ def miles_validate_args(args):
         args.use_session_server and args.partial_rollout
     ), "--use-session-server does not support --partial-rollout"
 
+    if args.session_capture_provenance and args.use_session_server not in (True, "v1"):
+        raise ValueError("--session-capture-provenance needs the v1 session server (bare --use-session-server)")
+
     if args.use_session_server == "v2":
         unsupported = [
             flag
@@ -2850,12 +2883,12 @@ def miles_validate_args(args):
                 f"--use-session-server v2 does not support {', '.join(unsupported)}; v2 returns list[Sample]"
             )
 
-    if args.use_session_server and args.use_rollout_routing_replay and args.pause_generation_mode == "retract":
+    if args.use_rollout_routing_replay and args.pause_generation_mode == "retract":
         logger.warning(
-            "--use-session-server with --use-rollout-routing-replay and "
-            "--pause-generation-mode=retract returns full R3 data on every turn; "
-            "R3 payloads can become very large. TODO: Retract-mode weight updates R3 "
-            "have known issues in SGLang and need to be fixed."
+            "SGLang can return routes that differ from decode-time routing when an in-flight "
+            "request is retracted during a weight update. With --use-rollout-routing-replay "
+            "and --pause-generation-mode=retract, verify R3 against the sampled tokens and "
+            "rollout log-probabilities before training."
         )
 
     if not 0.0 < args.rollout_top_p <= 1.0:

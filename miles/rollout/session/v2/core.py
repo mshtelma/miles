@@ -11,6 +11,7 @@ from miles.rollout.session.core import (
     _chat_client_response,
     _render_json,
     _samples_response,
+    collection_limit,
     extract_completion,
     proxy_result_to_response,
 )
@@ -88,6 +89,10 @@ class SessionCoreV2(SessionCore):
         fields = COMPUTED_FIELDS_V2
         if session.sampling_support_replay:
             fields += ROLLOUT_SAMPLING_MASK_FIELDS
+        try:
+            effective_limit = collection_limit(session.max_seq_len, max_seq_len)
+        except ValueError as exc:
+            return Response(content=str(exc).encode(), status_code=422, media_type="text/plain")
         if agent_metadata is not None:
             metadata["agent"] = agent_metadata
         if not session.tree.nodes:
@@ -99,7 +104,7 @@ class SessionCoreV2(SessionCore):
                 session,
                 self.registry,
                 session_id=session_id,
-                max_seq_len=max_seq_len,
+                max_seq_len=effective_limit,
                 use_addition_r3=self.use_addition_r3,
             )
         except (AssertionError, ValueError) as exc:
@@ -161,7 +166,7 @@ class SessionCoreV2(SessionCore):
                 message_matcher=self.registry.message_matcher,
             )
             request_body, tito_tokenizer = prepared.body, self.registry.tito_tokenizer
-            client_stream = prepared.client_stream
+            response_intent = prepared.response_intent
             request_messages = request_body.get("messages", [])
             prompt_token_ids = request_body["input_ids"]
             logger.debug("Using TITO input_ids: %d tokens", len(prompt_token_ids))
@@ -194,7 +199,7 @@ class SessionCoreV2(SessionCore):
         async with session.lock:
             if session.closing:
                 logger.debug("Session %s closed during proxy, skipping state update", session_id)
-                return _chat_client_response(result, response, client_stream)
+                return _chat_client_response(result, response, response_intent)
 
             record = SessionRecord(
                 timestamp=time.time(),
@@ -220,4 +225,4 @@ class SessionCoreV2(SessionCore):
             )
         # --- lock released ---
 
-        return _chat_client_response(result, response, client_stream)
+        return _chat_client_response(result, response, response_intent)

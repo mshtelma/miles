@@ -28,7 +28,7 @@ from typing import Any
 from miles.rollout.session.config import SessionServerConfig
 from miles.rollout.session.errors import MessageValidationError, TokenizationError, TruncatedGenerationError
 from miles.rollout.session.linear_trajectory import SessionRegistry, assert_pretokenized_prefix
-from miles.rollout.session.request_args import PreparedChatRequest, prepare_chat_request
+from miles.rollout.session.request_args import PreparedChatRequest, fit_completion_to_context, prepare_chat_request
 from miles.rollout.session.types import SessionRecord
 from miles.rollout.session.v2.tree_trajectory import AttachPoint, SessionTree, TrajectoryNode
 from miles.utils.chat_template_utils.message_matcher_hub import SessionMessageMatcher
@@ -52,6 +52,7 @@ class SessionStateV2:
     evaluation: bool = False
     sampling_defaults: dict[str, Any] = field(default_factory=dict)
     sampling_support_replay: bool = False
+    max_seq_len: int | None = None
 
     def latest(self) -> TrajectoryNode | None:
         """The most recently committed generation (always a leaf), or ``None``
@@ -113,6 +114,8 @@ def prepare_token_ids_and_request_args(
     prepared.body["input_ids"] = _render_token_ids(
         parent, request_messages, template_args=prepared.template_args, tito_tokenizer=tito_tokenizer
     )
+    limits = [limit for limit in (state.max_seq_len, config.rollout_max_context_len) if limit is not None]
+    fit_completion_to_context(prepared.body, context_limit=min(limits) if limits else None)
     return prepared, parent
 
 
@@ -224,12 +227,14 @@ class SessionRegistryV2(SessionRegistry):
         evaluation: bool = False,
         sampling_defaults: dict[str, Any] | None = None,
         sampling_support_replay: bool = False,
+        max_seq_len: int | None = None,
     ) -> str:
         session_id = uuid.uuid4().hex
         self.sessions[session_id] = SessionStateV2(
             evaluation=evaluation,
             sampling_defaults=dict(sampling_defaults or {}),
             sampling_support_replay=sampling_support_replay,
+            max_seq_len=max_seq_len,
         )
         return session_id
 

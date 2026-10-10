@@ -8,6 +8,7 @@ Owned by the session package so the assembly runs on the owning instance (record
 """
 
 from argparse import Namespace
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -200,19 +201,58 @@ def merge_samples_with_addition_r3(
     return merged
 
 
-def truncate_samples_by_total_tokens(
+@dataclass(frozen=True)
+class TruncationInfo:
+    original_token_count: int
+    retained_token_count: int
+    removed_turn_count: int
+    truncated_turn_count: int
+    retained_terminal_record_id: str | None
+
+    def collector_fields(self, sample: Sample, agent_metadata: dict | None) -> dict:
+        """Attest that the scored terminal record still owns the retained tokens."""
+        agent_metadata = agent_metadata or {}
+        retained_count = len(sample.tokens)
+        complete = (
+            self.removed_turn_count == 0
+            and self.truncated_turn_count == 0
+            and retained_count == self.retained_token_count
+            and sample.status == Sample.Status.COMPLETED
+        )
+        return {
+            "original_token_count": self.original_token_count,
+            "retained_token_count": retained_count,
+            "removed_turn_count": self.removed_turn_count,
+            "truncated_turn_count": self.truncated_turn_count + int(retained_count != self.retained_token_count),
+            "retained_terminal_record_id": self.retained_terminal_record_id if complete else None,
+            "reward_valid_for_retained_tokens": bool(
+                complete
+                and agent_metadata.get("stop_reason") == "final_answer"
+                and self.retained_terminal_record_id is not None
+                and agent_metadata.get("reward_record_id") == self.retained_terminal_record_id
+            ),
+        }
+
+
+def truncate_samples_with_provenance(
     samples: list[Sample],
-    max_seq_len: int,
+    max_seq_len: int | None,
     tokenizer,
-) -> list[Sample]:
-    """Truncate samples so the total token count (prompt + output, including
-    env responses) does not exceed ``max_seq_len``.
-    """
+    *,
+    record_ids: list[str | None] | None = None,
+) -> tuple[list[Sample], TruncationInfo]:
+    """Truncate at a turn boundary and report exactly what survived."""
+    if max_seq_len is not None and (type(max_seq_len) is not int or max_seq_len <= 0):
+        raise ValueError("max_seq_len must be a positive integer")
+    if record_ids is not None and len(record_ids) != len(samples):
+        raise ValueError("record IDs must align with sample turns")
+    original_token_count = len(samples[-1].tokens) if samples else 0
     result: list[Sample] = []
+    truncated_turn_count = 0
 
     for sample in samples:
         total = len(sample.tokens)
-        if total <= max_seq_len:
+        if max_seq_len is None or total <= max_seq_len:
             result.append(sample)
             continue
 
@@ -223,7 +263,41 @@ def truncate_samples_by_total_tokens(
 
         sample.strip_last_output_tokens(overshoot, tokenizer)
         sample.status = Sample.Status.TRUNCATED
+        truncated_turn_count = 1
         result.append(sample)
         break
 
+    removed_turn_count = len(samples) - len(result)
+    if removed_turn_count and result:
+        # A later discarded turn may hold the final answer even when this last
+        # retained turn originally completed. The merged status must say so.
+        result[-1].status = Sample.Status.TRUNCATED
+    retained_id = None
+    if result and not truncated_turn_count and record_ids is not None:
+        retained_id = record_ids[len(result) - 1]
+    info = TruncationInfo(
+        original_token_count=original_token_count,
+        retained_token_count=len(result[-1].tokens) if result else 0,
+        removed_turn_count=removed_turn_count,
+        truncated_turn_count=truncated_turn_count,
+        retained_terminal_record_id=retained_id,
+    )
+    return result, info
+
+
+def truncate_samples_by_total_tokens(samples: list[Sample], max_seq_len: int, tokenizer) -> list[Sample]:
+    """Keep the original turn-level truncation for ordinary sessions."""
+    result: list[Sample] = []
+    for sample in samples:
+        total = len(sample.tokens)
+        if total <= max_seq_len:
+            result.append(sample)
+            continue
+        overshoot = total - max_seq_len
+        if sample.response_length <= overshoot:
+            break
+        sample.strip_last_output_tokens(overshoot, tokenizer)
+        sample.status = Sample.Status.TRUNCATED
+        result.append(sample)
+        break
     return result

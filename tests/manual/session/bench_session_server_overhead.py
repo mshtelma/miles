@@ -372,6 +372,9 @@ def _build_server_config(
         pause_generation_mode="in_place" if bench_args.incremental_r3 else "retract",
         session_sample_picker_path=None,
         session_sample_postprocessor_path=None,
+        rollout_max_context_len=None,
+        session_addition_r3_on_retract=bench_args.incremental_r3,
+        session_capture_provenance=False,
     )
 
 

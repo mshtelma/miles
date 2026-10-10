@@ -88,7 +88,8 @@ def setup_session_routes(app, backend, config: SessionServerConfig, *, use_addit
 
     @app.exception_handler(SessionError)
     async def session_error_handler(request: Request, exc: SessionError):
-        return JSONResponse(status_code=exc.status_code, content={"error": str(exc)})
+        error = {"code": exc.code, "message": str(exc)} if hasattr(exc, "code") else str(exc)
+        return JSONResponse(status_code=exc.status_code, content={"error": error})
 
     @app.exception_handler(SessionMessageMatcherError)
     async def session_message_matcher_error_handler(request: Request, exc: SessionMessageMatcherError):
@@ -109,7 +110,8 @@ def setup_session_routes(app, backend, config: SessionServerConfig, *, use_addit
             return JSONResponse(status_code=400, content={"error": str(exc)})
         return await core.create_session(
             evaluation=params.evaluation,
-            sampling_defaults=params.model_dump(exclude={"evaluation"}, exclude_none=True),
+            sampling_defaults=params.model_dump(exclude={"evaluation", "max_seq_len"}, exclude_none=True),
+            max_seq_len=params.max_seq_len,
         )
 
     @app.get("/sessions/{session_id}")
@@ -228,11 +230,15 @@ def setup_session_routes(app, backend, config: SessionServerConfig, *, use_addit
         # Parse here so malformed input is not reported as an assembly error (422).
         body = await request.body()
         params = json.loads(body) if body else {}
+        if not isinstance(params, dict):
+            return JSONResponse(status_code=400, content={"error": "sample request must be an object"})
         if use_v2:
             return await core.collect_samples(
                 session_id, max_seq_len=params.get("max_seq_len"), agent_metadata=params.get("metadata")
             )
-        return await core.collect_samples(session_id, max_seq_len=params.get("max_seq_len"))
+        return await core.collect_samples(
+            session_id, max_seq_len=params.get("max_seq_len"), agent_metadata=params.get("metadata")
+        )
 
     @app.api_route("/sessions/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def session_proxy(request: Request, session_id: str, path: str):

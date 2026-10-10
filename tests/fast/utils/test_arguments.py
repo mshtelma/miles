@@ -746,7 +746,7 @@ class TestSessionServerPauseGenerationMode:
                 True,
             ),
             (["--use-session-server", "--pause-generation-mode", "retract"], False),
-            (["--use-rollout-routing-replay", "--pause-generation-mode", "retract"], False),
+            (["--use-rollout-routing-replay", "--pause-generation-mode", "retract"], True),
             (
                 [
                     "--use-session-server",
@@ -769,7 +769,7 @@ class TestSessionServerPauseGenerationMode:
         with caplog.at_level(logging.WARNING, logger="miles.utils.arguments"):
             miles_validate_args(args)
 
-        warned = any("R3 payloads can become very large" in record.message for record in caplog.records)
+        warned = any("differ from decode-time routing" in record.message for record in caplog.records)
         assert warned is expect_warning
 
 

@@ -89,19 +89,25 @@ class RolloutDataSource(DataSource):
             self.dataset = None
 
     def get_samples(self, num_samples):
-        # TODO further improve code
+        if type(num_samples) is not int or num_samples < 0:
+            raise ValueError("num_samples must be a nonnegative integer")
+        if num_samples == 0:
+            return []
         if self.dataset is not None:
-            if self.sample_offset + num_samples <= len(self.dataset):
-                prompt_samples = self.dataset.samples[self.sample_offset : self.sample_offset + num_samples]
-                self.sample_offset += num_samples
-            else:
-                prompt_samples = self.dataset.samples[self.sample_offset :]
-                num_samples -= len(prompt_samples)
-                self.epoch_id += 1
-                if self.args.rollout_shuffle:
-                    self.dataset.shuffle(self.epoch_id)
-                prompt_samples += self.dataset.samples[:num_samples]
-                self.sample_offset = num_samples
+            if not len(self.dataset):
+                raise ValueError("rollout prompt dataset is empty")
+            prompt_samples = []
+            remaining = num_samples
+            while remaining:
+                if self.sample_offset == len(self.dataset):
+                    self.epoch_id += 1
+                    self.sample_offset = 0
+                    if self.args.rollout_shuffle:
+                        self.dataset.shuffle(self.epoch_id)
+                count = min(remaining, len(self.dataset) - self.sample_offset)
+                prompt_samples.extend(self.dataset.samples[self.sample_offset : self.sample_offset + count])
+                self.sample_offset += count
+                remaining -= count
         else:
             prompt_samples = [Sample() for _ in range(num_samples)]
 

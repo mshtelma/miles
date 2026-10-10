@@ -24,7 +24,10 @@ Agent function contract:
 """
 
 import argparse
+import asyncio
 import logging
+import math
+import os
 import time
 from collections.abc import Callable
 from copy import deepcopy
@@ -34,12 +37,18 @@ import httpx
 from sglang.srt.entrypoints.openai.protocol import ChatCompletionRequest
 
 from miles.rollout.base_types import GenerateFnInput, GenerateFnOutput
-from miles.rollout.generate_utils.openai_endpoint_utils import OpenAIEndpointTracer
+from miles.rollout.generate_utils.agent_errors import EnvironmentFailure
+from miles.rollout.generate_utils.openai_endpoint_utils import SESSION_COLLECT_TIMEOUT, OpenAIEndpointTracer
+from miles.rollout.session.samples.provenance import untrusted_agent_metadata
 from miles.rollout.session.v2.metrics import SESSION_ROLLOUT_METRICS_KEY
 from miles.utils.function_registry import load_function
+from miles.utils.http_utils import HTTPResponseError
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+# The session server's assembly plus decoding the returned samples here.
+_COLLECT_TIMEOUT = SESSION_COLLECT_TIMEOUT + 300
 
 
 async def generate(input: GenerateFnInput) -> GenerateFnOutput:
@@ -50,14 +59,13 @@ async def generate(input: GenerateFnInput) -> GenerateFnOutput:
     )
     use_v2 = getattr(input.args, "use_session_server", None) == "v2"
     collect_spec_metrics = use_v2 and input.args.sglang_speculative_algorithm is not None
-    tracer = await OpenAIEndpointTracer.create(
-        input.args, evaluation=input.evaluation, sampling_params=input.sampling_params
-    )
-
     custom_agent_function: Callable = load_function(input.args.custom_agent_function_path)
     assert (
         custom_agent_function is not None
     ), f"Custom agent function {input.args.custom_agent_function_path} not found"
+    tracer = await OpenAIEndpointTracer.create(
+        input.args, evaluation=input.evaluation, sampling_params=input.sampling_params
+    )
 
     max_seq_len = getattr(input.args, "max_seq_len", None)
 
@@ -70,10 +78,20 @@ async def generate(input: GenerateFnInput) -> GenerateFnOutput:
     log_prefix = f"[session={tracer.session_id}]"
 
     # From the tracer, not args: with multiple instances the owning ip:port is per-session.
-    metadata = {**metadata, "session_server_id": tracer.session_server_id}
+    metadata = {
+        **metadata,
+        "session_server_id": tracer.session_server_id,
+        "session_id": tracer.session_id,
+        "attempt_id": os.environ.get("MILES_ATTEMPT_ID", getattr(input.args, "run_id", "local")),
+    }
 
     agent_metadata = None
     collect_failed = False
+    agent_failed = False
+    agent_exception = None
+    cancelled = False
+    non_generation_time = None
+    strict_errors = bool(getattr(input.args, "agentic_abort_on_agent_error", False))
     t_start = time.monotonic()
     try:
         logger.debug(f"{log_prefix} Starting agent function call")
@@ -83,29 +101,66 @@ async def generate(input: GenerateFnInput) -> GenerateFnOutput:
             request_kwargs=build_chat_request_kwargs(input.sampling_params),
             metadata=metadata,
         )
+        if agent_metadata is not None and not isinstance(agent_metadata, dict):
+            agent_metadata = None
+            raise TypeError("agent function must return a metadata object or None")
+        non_generation_time = _agent_tool_time(agent_metadata)
         logger.debug(f"{log_prefix} Agent function returned in {time.monotonic()-t_start:.1f}s")
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    except EnvironmentFailure as e:
+        agent_failed = True
+        logger.warning(f"{log_prefix} Agent environment failed: {e}", exc_info=True)
     except Exception as e:
-        logger.warning(f"{log_prefix} Agent function failed: {e}", exc_info=True)
+        if strict_errors:
+            agent_exception = e
+            logger.error(f"{log_prefix} Agent implementation failed: {e}", exc_info=True)
+        else:
+            logger.warning(f"{log_prefix} Agent function failed: {e}", exc_info=True)
 
     finally:
-        # Collect even if the agent failed.
-        logger.debug(f"{log_prefix} Calling collect_samples...")
-        collect_kwargs = {"max_seq_len": max_seq_len}
-        if use_v2:
-            collect_kwargs["agent_metadata"] = agent_metadata
-        try:
-            result = await tracer.collect_samples(input.sample, **collect_kwargs)
-        # Costs this sample, not the run; a non-2xx still raises RuntimeError.
-        except (TimeoutError, httpx.TransportError) as e:
-            collect_failed = True
-            logger.warning(f"{log_prefix} Failed collecting samples: {e!r}", exc_info=True)
+        if cancelled:
+            # A cancelled caller has no training sample to collect. Delete the
+            # session promptly so its recorded turns and active backend work do
+            # not remain attached to an abandoned request.
+            try:
+                await tracer.delete_session(timeout=10)
+            except Exception as e:
+                logger.warning(f"{log_prefix} Failed deleting cancelled session: {e!r}", exc_info=True)
         else:
-            logger.debug(
-                f"{log_prefix} collect_samples done: {len(result.samples)} samples, "
-                f"total_time={time.monotonic()-t_start:.1f}s"
-            )
+            # Both session versions attest the retained terminal response
+            # against the agent's scored response ID during collection.
+            collect_kwargs = {"max_seq_len": max_seq_len, "agent_metadata": agent_metadata}
+            try:
+                result = await asyncio.wait_for(
+                    tracer.collect_samples(input.sample, **collect_kwargs), timeout=_COLLECT_TIMEOUT
+                )
+            except (TimeoutError, httpx.TransportError) as e:
+                collect_failed = True
+                logger.warning(f"{log_prefix} Failed collecting samples: {e!r}", exc_info=True)
+            except HTTPResponseError as e:
+                if not strict_errors or (e.status_code != 429 and e.status_code < 500):
+                    if agent_exception is None:
+                        raise
+                    logger.warning(f"{log_prefix} Collection also failed after an agent error: {e!r}")
+                else:
+                    collect_failed = True
+                    logger.warning(f"{log_prefix} Session collector unavailable: {e!r}", exc_info=True)
+            except Exception as e:
+                if agent_exception is None:
+                    raise
+                logger.warning(f"{log_prefix} Collection also failed after an agent error: {e!r}", exc_info=True)
+            else:
+                logger.debug(
+                    f"{log_prefix} collect_samples done: {len(result.samples)} samples, "
+                    f"total_time={time.monotonic()-t_start:.1f}s"
+                )
 
-    if collect_failed:
+    if agent_exception is not None:
+        raise agent_exception
+
+    if collect_failed or (agent_failed and strict_errors):
         sample = deepcopy(input.sample)
         sample.status = Sample.Status.ABORTED
         if collect_spec_metrics:
@@ -150,15 +205,14 @@ async def generate(input: GenerateFnInput) -> GenerateFnOutput:
         # through collect_samples and came back applied by the server-side
         # merge (per-sample metadata/reward on the wire) — no overlay here.
         for s in samples:
-            s.metadata.update(agent_metadata or {})
+            s.metadata.update(untrusted_agent_metadata(agent_metadata))
 
     # If the agent function reports wall-clock time spent outside policy generation
     # (env/tool steps), surface it on Sample.non_generation_time so throughput
     # accounting subtracts it.
-    ngt = ((agent_metadata or {}).get("agent_metrics") or {}).get("total_tool_time")
-    if ngt is not None:
+    if non_generation_time is not None:
         for s in samples:
-            s.non_generation_time = ngt
+            s.non_generation_time = non_generation_time
 
     if use_v2:
         return GenerateFnOutput(samples=samples)
@@ -171,6 +225,11 @@ async def generate(input: GenerateFnInput) -> GenerateFnOutput:
 def _add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--custom-agent-function-path", type=str)
     parser.add_argument(
+        "--agentic-abort-on-agent-error",
+        action="store_true",
+        help="Abort environment failures and fail fast on agent implementation errors after session cleanup.",
+    )
+    parser.add_argument(
         "--max-seq-len",
         type=int,
         default=None,
@@ -182,6 +241,22 @@ def _add_arguments(parser: argparse.ArgumentParser):
 
 
 generate.add_arguments = _add_arguments
+
+
+def _agent_tool_time(agent_metadata: dict | None) -> float | None:
+    if agent_metadata is None:
+        return None
+    metrics = agent_metadata.get("agent_metrics")
+    if metrics is None:
+        return None
+    if not isinstance(metrics, dict):
+        raise TypeError("agent_metrics must be an object")
+    value = metrics.get("total_tool_time")
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+        raise ValueError("agent total_tool_time must be finite and nonnegative")
+    return float(value)
 
 
 # Process keys to match ChatCompletionRequest input

@@ -17,7 +17,10 @@ rollout engines, pausing producer submissions for the duration of the
 """
 
 import asyncio
+import heapq
 import logging
+import math
+import time
 from dataclasses import replace
 
 from miles.rollout.base_types import (
@@ -69,14 +72,31 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         assert input.args.async_unused_samples_handler in ("retry", "drop")
         # applied to every group we do not train on; "drop" discards instead of recycling
         self._handle_unused = (
-            self._recycle if input.args.async_unused_samples_handler == "retry" else (lambda prompt_group: None)
+            self._recycle if input.args.async_unused_samples_handler == "retry" else self._forget_attempts
         )
         self._sample_filter = load_function(input.args.rollout_sample_filter_path)
         self._worker: asyncio.Task | None = None
+        # The loop the worker runs on; the producer calls into the data source from its thread.
+        self._producer_loop: asyncio.AbstractEventLoop | None = None
         self._eval_prompt_dataset_cache: dict = {}
         self._producer_resumed = asyncio.Event()
         self._producer_resumed.set()
         self._output: DataBuffer | None = None
+        self._max_prompt_attempts = getattr(input.args, "async_max_prompt_attempts", None)
+        self._retry_backoff_s = getattr(input.args, "async_retry_backoff_s", 0.0)
+        self._no_progress_timeout_s = getattr(input.args, "async_no_progress_timeout_s", None)
+        if self._max_prompt_attempts is not None and self._max_prompt_attempts <= 0:
+            raise ValueError("async_max_prompt_attempts must be positive")
+        if not math.isfinite(self._retry_backoff_s) or self._retry_backoff_s < 0:
+            raise ValueError("async_retry_backoff_s must be finite and nonnegative")
+        if self._no_progress_timeout_s is not None and (
+            not math.isfinite(self._no_progress_timeout_s) or self._no_progress_timeout_s <= 0
+        ):
+            raise ValueError("async_no_progress_timeout_s must be positive and finite")
+        self._retry_counts: dict[int, int] = {}
+        self._retry_queue: list[tuple[float, int, list[Sample]]] = []
+        self._retry_sequence = 0
+        self._retries_exhausted = 0
 
     async def __call__(self, input: RolloutFnInput) -> RolloutFnOutput:
         if input.evaluation:
@@ -84,9 +104,14 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         if self._worker is None:
             buffer_cls = load_function(self.args.custom_async_data_buffer_path) or DefaultDataBuffer
             self._output = buffer_cls(
-                DataBufferConstructorInput(args=self.args, unused_handler_fn=self._handle_unused)
+                DataBufferConstructorInput(
+                    args=self.args,
+                    unused_handler_fn=self._handle_unused,
+                    discard_handler_fn=self._forget_attempts,
+                )
             )
             self._worker = asyncio.create_task(self._worker_loop())
+            self._producer_loop = asyncio.get_running_loop()
             logger.info("Started fully-async rollout worker")
         return await self._drain(input)
 
@@ -113,10 +138,24 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         return self.args.rollout_batch_size
 
     def _submit_one_group(self) -> tuple[asyncio.Task, list[Sample]]:
-        samples = self.data_source.get_samples(1)
+        if self._retry_queue and self._retry_queue[0][0] <= time.monotonic():
+            _, _, prompt_group = heapq.heappop(self._retry_queue)
+            samples = [prompt_group]
+        else:
+            samples = self.data_source.get_samples(1)
         self._scheduler.on_submit(samples)
         [prompt_group] = samples
+        if self._max_prompt_attempts is not None or self._retry_backoff_s:
+            group_id = self._group_id(prompt_group)
+            self._retry_counts[group_id] = self._retry_counts.get(group_id, 0) + 1
         return asyncio.create_task(self._generate_group(prompt_group)), prompt_group
+
+    @staticmethod
+    def _group_id(prompt_group: list[Sample]) -> int:
+        group_id = prompt_group[0].group_index
+        if type(group_id) is not int or group_id < 0:
+            raise ValueError("bounded retries require a nonnegative prompt group_index")
+        return group_id
 
     async def _generate_group(self, prompt_group: list[Sample]) -> DataBufferInput:
         result = await generate_and_rm_group(
@@ -137,8 +176,17 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
                 active[task] = prompt_group
             done, _ = await self._scheduler.wait_for_progress(set(active))
             for task in done:
-                entry = self._collect_group_result(task, active.pop(task))
+                prompt_group = active.pop(task)
+                entry = self._collect_group_result(task, prompt_group)
+                if self._source_takes(entry.group):
+                    self._forget_attempts(prompt_group)
+                    continue
                 await self._output.put(entry)
+
+    def _source_takes(self, group: Group) -> bool:
+        """Show the data source each finished group; it may keep one out of training, e.g. an eval probe."""
+        observe = getattr(self.data_source, "on_group_finished", None)
+        return observe is not None and bool(observe(group))
 
     def _collect_group_result(self, task: asyncio.Task, prompt_group: list[Sample]) -> DataBufferInput:
         if not task.cancelled():
@@ -155,14 +203,20 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
 
     # -------------------------- consumer --------------------------
 
-    async def _next_group(self, current_version: int | None) -> DataBufferInput:
+    async def _next_group(self, current_version: int | None, *, deadline: float | None = None) -> DataBufferInput:
         queue_get = asyncio.create_task(self._output.get(current_version=current_version))
         try:
             while True:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError(
+                        "fully-async rollout made no accepted-group progress; "
+                        f"retry_exhausted={self._retries_exhausted}, queued_retries={len(self._retry_queue)}"
+                    )
                 done, _ = await asyncio.wait(
                     {queue_get, self._worker},
                     return_when=asyncio.FIRST_COMPLETED,
-                    timeout=NO_PROGRESS_WARN_SECS,
+                    timeout=min(NO_PROGRESS_WARN_SECS, remaining) if remaining is not None else NO_PROGRESS_WARN_SECS,
                 )
                 # Checked before the queue: the worker loop never returns normally, so a
                 # dead worker fails the step now instead of after its backlog drains.
@@ -185,8 +239,12 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         do_print = True
 
         while len(data) < target_data_size:
-            entry = await self._next_group(input.weight_version)
+            deadline = (
+                time.monotonic() + self._no_progress_timeout_s if self._no_progress_timeout_s is not None else None
+            )
+            entry = await self._next_group(input.weight_version, deadline=deadline)
             assert len(entry.group) == args.n_samples_per_prompt
+            self._forget_attempts(entry.prompt_group)
 
             if do_print:
                 sample = first_sample(entry.group)
@@ -213,9 +271,61 @@ class FullyAsyncRolloutFn(BaseRolloutFn):
         if self._sample_filter is not None:
             self._sample_filter(args, data)
 
-        return RolloutFnTrainOutput(samples=data, metrics=self._output.get_metrics())
+        metrics = self._output.get_metrics()
+        metrics["rollout/fully_async/retry_exhausted"] = self._retries_exhausted
+        metrics["rollout/fully_async/queued_retries"] = len(self._retry_queue)
+        if (source_metrics := getattr(self.data_source, "rollout_metrics", None)) is not None:
+            metrics.update(source_metrics())
+        return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
     def _recycle(self, prompt_group: list[Sample]) -> None:
+        if self._max_prompt_attempts is not None or self._retry_backoff_s:
+            group_id = self._group_id(prompt_group)
+            attempts = self._retry_counts.get(group_id, 0)
+            if self._max_prompt_attempts is not None and attempts >= self._max_prompt_attempts:
+                self._forget_attempts(prompt_group)
+                self._retries_exhausted += 1
+                logger.warning("Quarantined prompt group after %d generation attempts", attempts)
+                return
         for sample in prompt_group:
             sample.reset_for_retry()
-        self.data_source.add_samples([prompt_group])
+        if self._retry_backoff_s:
+            delay = min(self._retry_backoff_s * 2 ** max(0, attempts - 1), 30.0)
+            self._retry_sequence += 1
+            heapq.heappush(
+                self._retry_queue,
+                (time.monotonic() + delay, self._retry_sequence, prompt_group),
+            )
+        else:
+            self.data_source.add_samples([prompt_group])
+
+    def _forget_attempts(self, prompt_group: list[Sample]) -> None:
+        if self._max_prompt_attempts is not None or self._retry_backoff_s:
+            self._retry_counts.pop(self._group_id(prompt_group), None)
+
+    # -------------------------- checkpointing --------------------------
+
+    def save_with_data_source(self, rollout_id: int) -> None:
+        """Save the data source on the producer's loop.
+
+        The producer calls the source's get_samples, add_samples and on_group_finished from that loop's
+        thread while the trainer saves. A save from the rollout actor's thread could read the source
+        mid-update: a dict that changes size during iteration, or a cursor out of step with the groups
+        it has issued. Run on the loop, the save sits between two producer steps.
+        """
+        loop = self._producer_loop
+        if loop is None or not loop.is_running() or _running_loop() is loop:
+            self.data_source.save(rollout_id)
+            return
+
+        async def save() -> None:
+            self.data_source.save(rollout_id)
+
+        asyncio.run_coroutine_threadsafe(save(), loop).result()
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None

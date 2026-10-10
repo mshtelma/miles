@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Request headers that must not be forwarded verbatim to the upstream backend.
 _DROP_REQUEST_HEADERS = ("content-length", "transfer-encoding", "host")
 
+# Keep idle client connections open longer than any client's pool does (httpx drops them
+# after 5 s). With uvicorn's own 5 s default, an agent that starts its next turn about 5 s
+# after the last one reuses a socket the server is closing and fails with httpx.ReadError.
+_KEEP_ALIVE_S = 75
+
 
 class SessionServer:
     """Lightweight FastAPI server that manages sessions and proxies inference
@@ -42,9 +47,9 @@ class SessionServer:
         # Close the httpx connection pool when uvicorn shuts down to avoid FD leaks.
         self.app.router.on_shutdown.append(self.client.aclose)
 
-        # `retract` may recompute earlier rows and must return full R3; all other
-        # pause modes preserve prior rows and can request only the appended R3.
-        self.use_addition_r3 = config.pause_generation_mode != "retract"
+        # Retract can recompute earlier rows. Only a run that explicitly accepts
+        # the retained-prefix contract may request incremental R3 in that mode.
+        self.use_addition_r3 = config.session_addition_r3_on_retract or config.pause_generation_mode != "retract"
         setup_session_routes(self.app, self, config, use_addition_r3=self.use_addition_r3)
 
     async def do_proxy(self, request: ProxyRequest, path: str, *, body: bytes, headers: dict) -> dict:
@@ -90,7 +95,14 @@ def run_session_server(config: SessionServerConfig):
         config.port,
         config.backend_url,
     )
-    uvicorn.run(server.app, host=config.host, port=config.port, log_level="info", access_log=False)
+    uvicorn.run(
+        server.app,
+        host=config.host,
+        port=config.port,
+        log_level="info",
+        access_log=False,
+        timeout_keep_alive=_KEEP_ALIVE_S,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
