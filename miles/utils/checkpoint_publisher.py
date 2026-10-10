@@ -1,8 +1,8 @@
 """Driver checkpoint publication after both trainer and rollout state have been saved.
 
-``--checkpoint-publisher-path`` loads a factory(args). Its object implements async
-before_save(rollout_id) and after_save(rollout_id). One publication may run in the
-background; the next save and shutdown drain it, and check() surfaces its errors.
+``--checkpoint-publisher-path`` loads a factory(args) whose object implements async
+after_save(rollout_id). One publication may run in the background; the next save and
+shutdown drain it, and check() surfaces its errors.
 """
 
 import asyncio
@@ -17,11 +17,6 @@ class CheckpointPublisher:
             raise ValueError("checkpoint publishers require synchronous saves")
         self._publisher = factory(args) if factory is not None else None
         self._pending = None
-
-    async def before_save(self, rollout_id: int) -> None:
-        await self.drain()
-        if self._publisher is not None:
-            await self._publisher.before_save(rollout_id)
 
     def after_save(self, rollout_id: int) -> None:
         if self._publisher is not None:

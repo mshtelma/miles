@@ -76,17 +76,17 @@ The reward credits a correct answer only if an LLM judge confirms the cited path
 judge is a Databricks serving endpoint, listed in `examples/glm5_3_flash/officeqa/judges.json`, so
 the workers need `DATABRICKS_HOST` and `DATABRICKS_TOKEN`.
 
-`--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`, checked against the base
-model's tensor set). The trainer waits for it: in the 8-node recipe, a save with the export takes
+`--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`, in the base model's layout).
+The trainer waits for it: in the 8-node recipe, a save with the export takes
 10 to 12 minutes. Without `--save-hf`, convert a save later with `tools/convert_torch_dist_to_hf.py`.
 
-On Databricks AI Runtime, four jobs run the whole flow: prepare, convert, train and evaluate. See
+On Databricks AI Runtime, three jobs run the whole flow: prepare, train and evaluate. See
 [OfficeQA on Databricks AI Runtime](/examples/glm5-3-flash/officeqa/air).
 
 ## 5. Evaluation
 
 `examples/glm5_3_flash/officeqa/air/eval.yaml` scores the base model or a `--save-hf` checkpoint on
-the held-out questions: standalone SGLang servers set up like the rollout engines, running the
+the held-out questions: a standalone SGLang server set up like the rollout engines, running the
 training agent, tools and reward. See
 [OfficeQA on Databricks AI Runtime](/examples/glm5-3-flash/officeqa/air).
 

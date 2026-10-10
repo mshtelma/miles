@@ -22,9 +22,11 @@ Args:
   --num-rollout / --rollout-batch-size / --n-samples-per-prompt: steps, prompts per step, samples each.
   --save-interval / --save-hf: full-state saves every N steps, each with a drop-in HF checkpoint
     (the trainer waits for the export; a full-model save takes 10 to 12 minutes with it).
-  --resume-root: continue from a save directory instead of the converted reference.
+  --persist-dir: save locally, copy every save there in the background (tools/air/publisher.py), and
+    resume from the newest copied save; without one, start from the converted reference.
   --skip-download: ``prepare`` converts the checkpoint already at ``--hf-checkpoint``, without downloading.
-  --mlflow-experiment: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is set).
+  --mlflow-experiment: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is set);
+    --mlflow-run-id logs into an existing run, such as the AIR job's.
 
 Examples:
   python scripts/run_glm5_3_flash.py prepare
@@ -101,8 +103,9 @@ class ScriptArgs(U.ExecuteTrainConfig):
     skip_saving: bool = False
     save_interval: int = 10
     save_hf: bool = False
-    resume_root: str | None = None
+    persist_dir: str | None = None
     mlflow_experiment: str | None = None
+    mlflow_run_id: str | None = None
     extra_args: str = ""
 
     @property
@@ -148,9 +151,10 @@ def _checkpoint_args(args: ScriptArgs) -> list[str]:
         "--ckpt-format",
         "torch_dist",
     ]
-    if args.resume_root is not None:
-        flags += ["--load", args.resume_root, "--exit-on-missing-checkpoint"]
-    else:
+    if args.persist_dir is not None:
+        # Miles resumes when Megatron's tracker is there and starts from --ref-load otherwise.
+        flags += ["--load", args.persist_dir, "--checkpoint-publisher-path", "tools.air.publisher.VolumePublisher"]
+    if not _resuming(args):
         # Skip the FP8 routed experts (the only FP8 tensors): the trainer loads the BF16 reference and
         # re-quantizes on export, so on the initial sync they differ from the engine's HF FP8 by about
         # one ULP. BF16 tensors are still checked exactly, which catches real mapping bugs.
@@ -163,10 +167,12 @@ def _checkpoint_args(args: ScriptArgs) -> list[str]:
             f"{args.output_dir}/checkpoints/iter_{{rollout_id:07d}}/hf",
             "--save-hf-layout-path",
             "examples.glm5_3_flash.hf_export.base_layout",
-            "--custom-megatron-post-save-hook-path",
-            "examples.glm5_3_flash.hf_export.finalize_hf_export",
         ]
     return flags
+
+
+def _resuming(args: ScriptArgs) -> bool:
+    return args.persist_dir is not None and os.path.exists(f"{args.persist_dir}/latest_checkpointed_iteration.txt")
 
 
 def _rollout_args(args: ScriptArgs) -> list[str]:
@@ -399,6 +405,8 @@ def _tracking_args(args: ScriptArgs) -> list[str]:
             "--mlflow-run-name",
             args.run_id,
         ]
+        if args.mlflow_run_id is not None:
+            flags += ["--mlflow-run-id", args.mlflow_run_id]
     return flags
 
 
@@ -434,6 +442,7 @@ def _env_vars(args: ScriptArgs) -> dict[str, str]:
         "TORCHINDUCTOR_COMPILE_THREADS": "1",
         "MILES_RUN_ID": args.run_id,
         **agent_env(args.data_dir),
+        **({"MILES_PERSIST_DIR": args.persist_dir} if args.persist_dir is not None else {}),
     }
     for key in (
         "TRITON_CACHE_DIR",

@@ -1459,10 +1459,10 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to a factory `def publisher(args)` whose object the driver calls around every save: "
-                    "`async before_save(rollout_id)` before it and `async after_save(rollout_id)` once the trainer "
-                    "and rollout states are saved. after_save runs in the background; the next save and shutdown "
-                    "wait for it, and its failure stops training. Requires synchronous saves (no --async-save)."
+                    "Path to a factory `def publisher(args)` whose object's `async after_save(rollout_id)` the "
+                    "driver runs in the background once the trainer and rollout states of a save are written. "
+                    "The next save and shutdown wait for it, and its failure stops training. Requires "
+                    "synchronous saves (no --async-save)."
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)

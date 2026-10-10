@@ -11,9 +11,6 @@ class RecordingPublisher:
     def __init__(self, args):
         self.args = args
 
-    async def before_save(self, step):
-        self.args.events.append(("before", step))
-
     async def after_save(self, step):
         self.args.events.append(("start", step))
         await self.args.release.wait()
@@ -35,7 +32,7 @@ def _args(**kwargs):
 
 async def test_unconfigured_publisher_has_no_runtime_dependency():
     publisher = CheckpointPublisher(SimpleNamespace())
-    await publisher.before_save(0)
+    await publisher.drain()
     publisher.after_save(0)
     publisher.check()
     await publisher.drain()
@@ -45,15 +42,14 @@ async def test_next_save_and_shutdown_wait_for_publication():
     args = _args()
     with function_registry.temporary("test.publisher", RecordingPublisher):
         publisher = CheckpointPublisher(args)
-    await publisher.before_save(1)
     publisher.after_save(1)
-    before_next = asyncio.create_task(publisher.before_save(2))
+    before_next = asyncio.create_task(publisher.drain())
     await asyncio.sleep(0)
-    assert args.events == [("before", 1), ("start", 1)]
+    assert args.events == [("start", 1)]
     assert not before_next.done()
     args.release.set()
     await before_next
-    assert args.events[-2:] == [("complete", 1), ("before", 2)]
+    assert args.events == [("start", 1), ("complete", 1)]
     args.release.clear()
     publisher.after_save(2)
     shutdown = asyncio.create_task(publisher.drain())
@@ -86,8 +82,7 @@ async def test_failed_publication_blocks_the_next_save():
         publisher = CheckpointPublisher(args)
     publisher.after_save(1)
     with pytest.raises(RuntimeError, match="publication failed"):
-        await publisher.before_save(2)
-    assert ("before", 2) not in args.events
+        await publisher.drain()  # what the driver awaits before its next save
 
 
 def test_async_saves_cannot_publish_before_writers_finish():

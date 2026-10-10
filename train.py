@@ -95,7 +95,7 @@ async def _train(args, publisher):
 
     async def save(rollout_id, force_sync=False):
         force_sync = force_sync or rollout_id == args.num_rollout - 1
-        await publisher.before_save(rollout_id)
+        await publisher.drain()
 
         async def save_training_model(model):
             if args.use_critic and args.offload_train:

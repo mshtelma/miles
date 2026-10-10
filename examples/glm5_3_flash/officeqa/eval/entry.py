@@ -1,18 +1,21 @@
-"""Evaluate pinned HF weights on OfficeQA with one standalone SGLang server on one AIR node."""
+"""Evaluate an HF checkpoint on OfficeQA with one standalone SGLang server on one AIR node.
+
+The checkpoint is the base model or the HF export inside a training save that has been copied to the Volume
+in full: Megatron's tracker there has reached the save, and Miles marked its export complete.
+"""
 
 import argparse
 import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 from pathlib import Path
 
 from examples.glm5_3_flash.officeqa import settings
 from examples.glm5_3_flash.officeqa.eval import driver, proxy, server
-from tools.air import fuse_transfer as fuse
-from tools.air import process as process_utils
-from tools.air import stage_models
+from tools.air.copy_tree import copy_tree
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +24,8 @@ def _parse(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--volume-root", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--input-manifest")
     parser.add_argument("--local-root", type=Path, default=Path("/tmp/miles-air"))
-    parser.add_argument("--hf-source", required=True)
+    parser.add_argument("--hf-source", default="base", help="base, or a save's directory .../checkpoints/iter_<step>")
     parser.add_argument("--eval-set", action="append", metavar="NAME=PATH")
     parser.add_argument("--samples-per-prompt", type=int, default=8)
     parser.add_argument("--max-concurrent", type=int, default=480)
@@ -33,11 +35,21 @@ def _parse(argv):
     parser.add_argument("--port", type=int, default=server.DEFAULT_PORT)
     args = parser.parse_args(argv)
     args.attempt_id = os.environ["MLFLOW_RUN_ID"]
-    args.root = args.volume_root / "runs" / args.run_id / "attempts" / args.attempt_id
-    args.manifest = process_utils.resolve_path(args.input_manifest, args.volume_root / "inputs/latest")
-    args.input_root = args.local_root / "inputs" / args.manifest.stem
-    args.eval_sets = _eval_sets(args.eval_set or ["heldout=data/officeqa/eval_heldout.jsonl"], args.input_root)
+    args.out_dir = args.volume_root / "runs" / args.run_id / args.attempt_id
+    args.eval_sets = _eval_sets(args.eval_set or ["heldout=data/officeqa/eval_heldout.jsonl"], args.local_root)
     return args
+
+
+def model_source(volume_root: Path, hf_source: str) -> tuple[Path, dict]:
+    """The HF directory to serve, and what the outputs record about it."""
+    if hf_source == "base":
+        return volume_root / "models/GLM-5.3-Flash", {"kind": "base"}
+    save = Path(hf_source)
+    step = int(save.name.removeprefix("iter_"))
+    copied = int((save.parent / "latest_checkpointed_iteration.txt").read_text())
+    if copied < step or not (save / "hf/.complete").is_file():
+        raise ValueError(f"{save} is not a fully copied save with a complete HF export")
+    return save / "hf", {"kind": "checkpoint", "path": str(save), "rollout_id": step}
 
 
 def _eval_sets(values: list[str], input_root: Path) -> dict[str, Path]:
@@ -122,24 +134,27 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO)
     args = _parse(argv)
     started = time.monotonic()
-    limiter = fuse.NodeTransferLimiter(args.local_root / "transfer-slots", 32)
-    staged = stage_models.stage_hf(args.hf_source, args.manifest, args.input_root, "GLM-5.3-Flash", limiter)
-    os.environ.update(settings.agent_env(str(args.input_root / "data")))
+    source, model = model_source(args.volume_root, args.hf_source)
+    model_path = args.local_root / "model"
+    copy_tree(source, model_path)
+    copy_tree(args.volume_root / "data/officeqa", args.local_root / "data/officeqa")
+    os.environ.update(settings.agent_env(str(args.local_root / "data")))
     timings = {"stage_s": time.monotonic() - started}
     url = f"http://127.0.0.1:{args.port}"
     log_path = args.local_root / "sglang.log"
     process = server.launch(
-        server.server_argv(staged.path, host="127.0.0.1", port=args.port, seed=1234), log_path=log_path
+        server.server_argv(model_path, host="127.0.0.1", port=args.port, seed=1234), log_path=log_path
     )
     try:
         timings["ready_s"] = server.wait_ready(url, process, timeout_s=1800)
         started = time.monotonic()
-        outcomes, harness = asyncio.run(_evaluate(args, url, staged.path, process))
+        outcomes, harness = asyncio.run(_evaluate(args, url, model_path, process))
         timings["eval_s"] = time.monotonic() - started
     finally:
         server.stop(process)
         if log_path.exists():
-            fuse.write_bytes(args.root / "sglang.log", log_path.read_bytes(), repair=True)
+            args.out_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(log_path, args.out_dir / "sglang.log")
     lost = driver.lost_fraction(outcomes)
     valid = lost <= args.max_lost_fraction
     metrics = {
@@ -148,12 +163,10 @@ def main(argv=None) -> int:
     metrics.update(
         {f"officeqa_eval/harness/{key}": value for key, value in {**harness, **timings, "lost_fraction": lost}.items()}
     )
-    summary = {"valid": valid, "metrics": metrics, "model": staged.identity}
-    driver.write_outputs(args.root / "eval", model=staged.identity, summary=summary, outcomes=outcomes)
-    _log_mlflow(args, metrics, staged.identity, staged.identity.get("rollout_id") or 0)
-    print(
-        "OfficeQA eval: " + json.dumps({"valid": valid, "lost_fraction": lost, "model": staged.identity}), flush=True
-    )
+    summary = {"valid": valid, "metrics": metrics, "model": model}
+    driver.write_outputs(args.out_dir, model=model, summary=summary, outcomes=outcomes)
+    _log_mlflow(args, metrics, model, model.get("rollout_id") or 0)
+    print("OfficeQA eval: " + json.dumps({"valid": valid, "lost_fraction": lost, "model": model}), flush=True)
     return 0 if valid else 1
 
 

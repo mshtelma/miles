@@ -102,27 +102,29 @@ def test_more_nodes_add_rollout_engines(launcher):
     assert _value(tokens, "--rollout-num-gpus") == "64"
 
 
-def test_save_hf_exports_inside_each_save_through_the_hook(launcher):
+def test_save_hf_exports_inside_each_save_in_the_base_layout(launcher):
     _, tokens = _run(launcher, save_hf=True, save_interval=25)
 
     hf_path = _value(tokens, "--save-hf")
     assert hf_path.format(rollout_id=99).endswith("/checkpoints/iter_0000099/hf")
     assert hf_path.startswith(_value(tokens, "--save") + "/")
     assert _value(tokens, "--save-interval") == "25"
-    assert _value(tokens, "--custom-megatron-post-save-hook-path") == (
-        "examples.glm5_3_flash.hf_export.finalize_hf_export"
-    )
     assert _value(tokens, "--save-hf-layout-path") == "examples.glm5_3_flash.hf_export.base_layout"
 
 
-def test_a_resumed_run_loads_its_save_and_skips_the_initial_weight_check(launcher):
-    _, fresh = _run(launcher)
+def test_a_persist_dir_is_where_saves_are_copied_and_resumed_from(launcher, tmp_path):
+    persist = tmp_path / "checkpoints"
+    _, fresh = _run(launcher, persist_dir=str(persist))
+    (persist / "latest_checkpointed_iteration.txt").parent.mkdir()
+    (persist / "latest_checkpointed_iteration.txt").write_text("9")
     launcher[1].clear()
-    _, resumed = _run(launcher, resume_root="/saves/run/checkpoints")
+    _, resumed = _run(launcher, persist_dir=str(persist))
 
-    assert "--check-weight-update-equal" in fresh and "--load" not in fresh
-    assert _value(resumed, "--load") == "/saves/run/checkpoints"
-    assert "--exit-on-missing-checkpoint" in resumed and "--check-weight-update-equal" not in resumed
+    for tokens in (fresh, resumed):
+        assert _value(tokens, "--load") == str(persist)
+        assert _value(tokens, "--checkpoint-publisher-path") == "tools.air.publisher.VolumePublisher"
+    # Only a fresh start checks the initial weight sync against the reference.
+    assert "--check-weight-update-equal" in fresh and "--check-weight-update-equal" not in resumed
 
 
 @pytest.mark.parametrize(
