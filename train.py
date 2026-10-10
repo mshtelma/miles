@@ -10,6 +10,7 @@ from miles.ray.wiring import launch_worker_manager
 from miles.utils import object_store
 from miles.utils.arguments import parse_args
 from miles.utils.audit_utils.process_identity import MainProcessIdentity
+from miles.utils.checkpoint_publisher import CheckpointPublisher
 from miles.utils.data import remove_rollout_data_refs
 from miles.utils.debug_utils.periodic_py_spy import maybe_start_periodic_pyspy_dump
 from miles.utils.ft_utils.api_server.server import start_api_server
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 async def train(args):
     assert not args.fully_async, "--fully-async requires the async driver: run train_async.py"
+    publisher = CheckpointPublisher(args)
+    try:
+        await _train(args, publisher)
+    finally:
+        await publisher.drain()
+
+
+async def _train(args, publisher):
     configure_logger(args, source=MainProcessIdentity())
     maybe_start_periodic_pyspy_dump()
     _worker_manager = launch_worker_manager(args)
@@ -86,6 +95,7 @@ async def train(args):
 
     async def save(rollout_id, force_sync=False):
         force_sync = force_sync or rollout_id == args.num_rollout - 1
+        await publisher.before_save(rollout_id)
 
         async def save_training_model(model):
             if args.use_critic and args.offload_train:
@@ -99,6 +109,7 @@ async def train(args):
         if args.use_critic:
             await save_training_model(critic_model)
         await rollout_executor.save.remote(rollout_id)
+        publisher.after_save(rollout_id)
 
     if args.num_rollout > args.start_rollout_id and args.eval_interval is not None and not args.skip_eval_before_train:
         await inference_controller.prepare_eval()
@@ -110,6 +121,7 @@ async def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
+        publisher.check()
         await inference_controller.prepare_rollout(rollout_id)
         rollout_data_pack = await rollout_executor.get.remote(rollout_id)
 
@@ -179,6 +191,7 @@ async def train(args):
             break
 
     await eval_dispatcher.drain()
+    await publisher.drain()
     await rollout_executor.dispose.remote()
     await inference_controller.dispose()
     await actor_model.dispose()

@@ -9,6 +9,7 @@ from miles.utils import object_store
 from miles.utils.arguments import parse_args, validate_async_off_policy_correction
 from miles.utils.async_utils import eager_create_task
 from miles.utils.audit_utils.process_identity import MainProcessIdentity
+from miles.utils.checkpoint_publisher import CheckpointPublisher
 from miles.utils.data import remove_rollout_data_refs
 from miles.utils.debug_utils.periodic_py_spy import maybe_start_periodic_pyspy_dump
 from miles.utils.ft_utils.api_server.server import start_api_server
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 async def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
     validate_async_off_policy_correction(args)
+    publisher = CheckpointPublisher(args)
+    try:
+        await _train(args, publisher)
+    finally:
+        await publisher.drain()
+
+
+async def _train(args, publisher):
     configure_logger(args, source=MainProcessIdentity())
     maybe_start_periodic_pyspy_dump()
     _worker_manager = launch_worker_manager(args)
@@ -80,6 +89,7 @@ async def train(args):
     # async train loop.
     rollout_data_next_future = await eager_create_task(prepare_and_generate(args.start_rollout_id))
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
+        publisher.check()
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = await rollout_data_next_future
@@ -110,10 +120,12 @@ async def train(args):
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
             force_sync = external_save or rollout_id == args.num_rollout - 1
+            await publisher.before_save(rollout_id)
             await save_training_model(actor_model, rollout_id, force_sync)
             if args.use_critic:
                 await save_training_model(critic_model, rollout_id, force_sync)
             await rollout_executor.save.remote(rollout_id)
+            publisher.after_save(rollout_id)
             if external_save:
                 os.remove(args.save_trigger_sentinel)
 
@@ -142,6 +154,7 @@ async def train(args):
             break
 
     await eval_dispatcher.drain()
+    await publisher.drain()
     await rollout_executor.dispose.remote()
     await inference_controller.dispose()
     await actor_model.dispose()

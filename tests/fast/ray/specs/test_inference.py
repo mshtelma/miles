@@ -346,6 +346,17 @@ class TestSessionServerRouterPoolLookup:
 
 
 class TestInferenceEngineEnvVars:
+    def test_run_identity_reaches_the_ray_worker(self, monkeypatch):
+        for key, value in {
+            "MILES_RUN_ID": "run",
+            "MILES_ATTEMPT_ID": "attempt",
+        }.items():
+            monkeypatch.setenv(key, value)
+
+        envs = compute_inference_engine_env_vars(make_args())
+
+        assert envs["MILES_RUN_ID"] == "run" and envs["MILES_ATTEMPT_ID"] == "attempt"
+
     def test_a_process_level_override_wins_over_the_built_in_default(self, monkeypatch):
         """The launcher's environment is how operators retune sglang per cluster, so defaults must not overwrite it."""
         monkeypatch.setenv("SGLANG_JIT_DEEPGEMM_PRECOMPILE", "true")

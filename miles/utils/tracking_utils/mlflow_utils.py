@@ -58,7 +58,12 @@ def init_mlflow(args, *, primary: bool = True, **kwargs) -> None:
         logger.info("MLflow tracking URI: %s", tracking_uri)
 
     experiment_name = args.mlflow_experiment_name
-    mlflow.set_experiment(experiment_name)
+    attached_run_id = args.mlflow_run_id or (os.environ.get("MLFLOW_RUN_ID") if not primary else None)
+    if attached_run_id is not None:
+        # An existing run must be attached in its own experiment.
+        mlflow.set_experiment(experiment_id=mlflow.get_run(attached_run_id).info.experiment_id)
+    else:
+        mlflow.set_experiment(experiment_name)
 
     if primary:
         _init_mlflow_primary(args, experiment_name)
@@ -77,7 +82,9 @@ def _init_mlflow_primary(args, experiment_name: str) -> None:
         tags["slurm_job_id"] = slurm_job_id
     tags["rank"] = str(args.rank)
 
-    run = mlflow.start_run(run_name=run_name, tags=tags)
+    if args.mlflow_run_id is not None:
+        tags["miles.requested_experiment"] = experiment_name
+    run = mlflow.start_run(run_id=args.mlflow_run_id, run_name=run_name, tags=tags)
     mlflow.log_params(_compute_config_for_logging(args))
 
     args.mlflow_run_id = run.info.run_id

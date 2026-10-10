@@ -1454,6 +1454,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "hf_checkpoint_dir: str | None) -> None."
                 ),
             )
+            parser.add_argument(
+                "--checkpoint-publisher-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a factory `def publisher(args)` whose object the driver calls around every save: "
+                    "`async before_save(rollout_id)` before it and `async after_save(rollout_id)` once the trainer "
+                    "and rollout states are saved. after_save runs in the background; the next save and shutdown "
+                    "wait for it, and its failure stops training. Requires synchronous saves (no --async-save)."
+                ),
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
