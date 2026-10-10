@@ -1,5 +1,7 @@
 # ruff: noqa
 # Adapt from https://github.com/tile-ai/tilelang/blob/4ff81c7d40803d269569e157e847623e84553f78/examples/deepseek_v32/sparse_mla_bwd.py
+import os
+
 import tilelang
 import torch
 from tilelang import language as T
@@ -7,8 +9,6 @@ from tilelang import language as T
 
 @tilelang.jit(out_idx=[-1])
 def preprocess(
-    B,
-    S,
     H,
     D,
     block_ND=32,
@@ -18,6 +18,8 @@ def preprocess(
 ):
     assert dtype == T.bfloat16
     assert accum_dtype == T.float32
+    B = T.dynamic("batch")
+    S = T.dynamic("seq_len")
     shape = [B, S, H, D]
 
     @T.prim_func
@@ -45,8 +47,6 @@ def preprocess(
 
 @tilelang.jit(out_idx=[-1])
 def postprocess(
-    B,
-    S_kv,
     D,
     D_tail,
     kv_group=1,
@@ -57,6 +57,8 @@ def postprocess(
 ):
     assert dtype == T.bfloat16
     assert accum_dtype == T.float32
+    B = T.dynamic("batch")
+    S_kv = T.dynamic("seq_len_kv")
     dkv_shape = [B, S_kv, kv_group, D + D_tail]
 
     @T.prim_func
@@ -85,24 +87,18 @@ def postprocess(
     },
 )
 def bwd(
-    B,
-    S,
-    S_kv,
     H,
     D,
     D_tail,
     topk,
     kv_group=1,
     sm_scale=None,
-    is_causal=True,
     block_size=32,
     num_stages=0,
-    threads=128,
     indices_dtype=T.int32,
     dtype=T.bfloat16,
     accum_dtype=T.float32,
 ):
-    assert is_causal == True, "non-casual is not supported now"
     assert topk % block_size == 0, "otherwise will load some index=0 thus causing wrong kv to be loaded"
     assert dtype == T.bfloat16
     assert accum_dtype == T.float32
@@ -113,6 +109,9 @@ def bwd(
     sm_scale_mul_reciprocal_log2 = sm_scale * 1.44269504  # log2(e)
 
     H_kv = H // kv_group
+    B = T.dynamic("batch")
+    S = T.dynamic("seq_len")
+    S_kv = T.dynamic("seq_len_kv")
     q_shape = [B, S, H, D + D_tail]
     k_shape = [B, S_kv, kv_group, D + D_tail]
     o_shape = [B, S, H, D]
@@ -125,9 +124,11 @@ def bwd(
 
     H = H_kv
     padded_H = max(tilelang.math.next_power_of_2(H_kv), 16)
-    block_H = min(64, padded_H)
+    max_block_H = 32 if os.getenv("MILES_HARDWARE_PLATFORM") == "rocm" and padded_H >= 64 else 64
+    block_H = min(max_block_H, padded_H)
     assert padded_H % block_H == 0
     NH = padded_H // block_H
+    threads = 256 if block_H >= 64 else 128
     BS = block_size
     NS = tilelang.cdiv(topk, block_size)
 
@@ -146,35 +147,34 @@ def bwd(
     ):
         with T.Kernel(S, B, kv_group * NH, threads=threads) as (s_i, by, bz):
             Q_shared = T.alloc_shared([block_H, D], dtype)
-            Q_tail_shared = T.alloc_shared([block_H, D_tail], dtype)
             KV_shared = T.alloc_shared([BS, D], dtype)
-            KV_tail_shared = T.alloc_shared([BS, D_tail], dtype)
             dO_shared = T.alloc_shared([block_H, D], dtype)
-            mask = T.alloc_fragment([BS], "bool")
-            kv_i = T.alloc_fragment([BS], indices_dtype)
+            mask = T.alloc_shared([BS], "bool")
+            kv_i = T.alloc_shared([BS], indices_dtype)
 
             P_shared_cast = T.alloc_shared([block_H, BS], dtype)
             dP_shared_cast = T.alloc_shared([block_H, BS], dtype)
             dQ_shared = T.alloc_shared([block_H, D], dtype)
-            dQ_tail_shared = T.alloc_shared([block_H, D_tail], dtype)
 
             acc_p = T.alloc_fragment([block_H, BS], accum_dtype)
             acc_dp = T.alloc_fragment([block_H, BS], accum_dtype)
             acc_dq = T.alloc_fragment([block_H, D], accum_dtype)
-            acc_dq_tail = T.alloc_fragment([block_H, D_tail], accum_dtype)
             acc_dkv = T.alloc_fragment([BS, D], accum_dtype)
-            acc_dkv_tail = T.alloc_fragment([BS, D_tail], accum_dtype)
             acc_dkv_shared = T.alloc_shared([BS // split_store, D], accum_dtype)
-            acc_dkv_tail_shared = T.alloc_shared([BS // split_store, D_tail], accum_dtype)
-
-            # max_kv_i = s_i
+            if D_tail > 0:
+                Q_tail_shared = T.alloc_shared([block_H, D_tail], dtype)
+                KV_tail_shared = T.alloc_shared([BS, D_tail], dtype)
+                dQ_tail_shared = T.alloc_shared([block_H, D_tail], dtype)
+                acc_dq_tail = T.alloc_fragment([block_H, D_tail], accum_dtype)
+                acc_dkv_tail = T.alloc_fragment([BS, D_tail], accum_dtype)
+                acc_dkv_tail_shared = T.alloc_shared([BS // split_store, D_tail], accum_dtype)
 
             T.copy(Q[by, s_i, bz * block_H : (bz + 1) * block_H, :D], Q_shared)
-            T.copy(Q[by, s_i, bz * block_H : (bz + 1) * block_H, D:], Q_tail_shared)
             T.copy(dO[by, s_i, bz * block_H : (bz + 1) * block_H, :D], dO_shared)
-
             T.clear(acc_dq)
-            T.clear(acc_dq_tail)
+            if D_tail > 0:
+                T.copy(Q[by, s_i, bz * block_H : (bz + 1) * block_H, D:], Q_tail_shared)
+                T.clear(acc_dq_tail)
 
             # Process each block of indices
             for i_i in T.Pipelined(NS, num_stages=num_stages):
@@ -200,9 +200,12 @@ def bwd(
 
                 T.gemm(Q_shared, KV_shared, acc_p, transpose_B=True, policy=T.GemmWarpPolicy.FullCol)
 
-                for bi_i, d_i in T.Parallel(BS, D_tail):
-                    KV_tail_shared[bi_i, d_i] = T.if_then_else(mask[bi_i], KV[by, kv_i[bi_i], bz // NH, D + d_i], 0)
-                T.gemm(Q_tail_shared, KV_tail_shared, acc_p, transpose_B=True, policy=T.GemmWarpPolicy.FullCol)
+                if D_tail > 0:
+                    for bi_i, d_i in T.Parallel(BS, D_tail):
+                        KV_tail_shared[bi_i, d_i] = T.if_then_else(
+                            mask[bi_i], KV[by, kv_i[bi_i], bz // NH, D + d_i], 0
+                        )
+                    T.gemm(Q_tail_shared, KV_tail_shared, acc_p, transpose_B=True, policy=T.GemmWarpPolicy.FullCol)
 
                 for h_i, bi_i in T.Parallel(block_H, BS):
                     acc_p[h_i, bi_i] = T.exp2(
@@ -222,7 +225,8 @@ def bwd(
 
                 T.copy(acc_dp, dP_shared_cast)
                 T.gemm(dP_shared_cast, KV_shared, acc_dq, policy=T.GemmWarpPolicy.FullCol)
-                T.gemm(dP_shared_cast, KV_tail_shared, acc_dq_tail, policy=T.GemmWarpPolicy.FullCol)
+                if D_tail > 0:
+                    T.gemm(dP_shared_cast, KV_tail_shared, acc_dq_tail, policy=T.GemmWarpPolicy.FullCol)
 
                 T.gemm(
                     dP_shared_cast,
@@ -234,17 +238,21 @@ def bwd(
                 )
                 T.gemm(P_shared_cast, dO_shared, acc_dkv, transpose_A=True, policy=T.GemmWarpPolicy.FullCol)
 
-                T.clear(acc_dkv_tail)
-                T.gemm(dP_shared_cast, Q_tail_shared, acc_dkv_tail, transpose_A=True, policy=T.GemmWarpPolicy.FullCol)
+                if D_tail > 0:
+                    T.clear(acc_dkv_tail)
+                    T.gemm(
+                        dP_shared_cast, Q_tail_shared, acc_dkv_tail, transpose_A=True, policy=T.GemmWarpPolicy.FullCol
+                    )
 
                 for s in range(split_store):
                     for bi_i, d_i in T.Parallel(BS, D):
                         if bi_i < BS // split_store:
                             acc_dkv_shared[bi_i, d_i] = acc_dkv[bi_i + s * (BS // split_store), d_i]
 
-                    for bi_i, d_i in T.Parallel(BS, D_tail):
-                        if bi_i < BS // split_store:
-                            acc_dkv_tail_shared[bi_i, d_i] = acc_dkv_tail[bi_i + s * (BS // split_store), d_i]
+                    if D_tail > 0:
+                        for bi_i, d_i in T.Parallel(BS, D_tail):
+                            if bi_i < BS // split_store:
+                                acc_dkv_tail_shared[bi_i, d_i] = acc_dkv_tail[bi_i + s * (BS // split_store), d_i]
 
                     # Padded slots contribute an exact zero here (their P and dP columns are
                     # zero), so the clamped address makes the atomic a no-op rather than an
@@ -255,59 +263,38 @@ def bwd(
                             acc_dkv_shared[bi_i, d_i * 4],
                         )
 
-                    # Atomically update dKV, dKV_tail tensors
-                    for bi_i, d_i in T.Parallel(BS // split_store, D_tail // 4):
-                        T.atomic_addx4(
-                            dKV[by, kv_i[bi_i + s * (BS // split_store)], bz // NH, D + d_i * 4],
-                            acc_dkv_tail_shared[bi_i, d_i * 4],
-                        )
+                    if D_tail > 0:
+                        for bi_i, d_i in T.Parallel(BS // split_store, D_tail // 4):
+                            T.atomic_addx4(
+                                dKV[by, kv_i[bi_i + s * (BS // split_store)], bz // NH, D + d_i * 4],
+                                acc_dkv_tail_shared[bi_i, d_i * 4],
+                            )
 
-            # Store the accumulated dQ
             T.copy(acc_dq, dQ_shared)
-            T.copy(acc_dq_tail, dQ_tail_shared)
-
             T.copy(dQ_shared, dQ[by, s_i, bz * block_H : (bz + 1) * block_H, :D])
-            T.copy(dQ_tail_shared, dQ[by, s_i, bz * block_H : (bz + 1) * block_H, D:])
+            if D_tail > 0:
+                T.copy(acc_dq_tail, dQ_tail_shared)
+                T.copy(dQ_tail_shared, dQ[by, s_i, bz * block_H : (bz + 1) * block_H, D:])
 
     return sparse_mla_bwd_kernel
 
 
-def sparse_mla_bwd(q, kv, o, do, indices, lse, sm_scale=None, is_casual=True, return_kernel=False, delta=None):
-    q = q.unsqueeze(0)
-    kv = kv.unsqueeze(0)
-    o = o.unsqueeze(0)
-    do = do.unsqueeze(0)
-    indices = indices.unsqueeze(0)
-    lse = lse.unsqueeze(0)
-
-    assert q.is_contiguous()
-    assert kv.is_contiguous()
-    assert indices.is_contiguous()
-    assert lse.is_contiguous()
+def sparse_attn_bwd_interface(q, kv, o, do, indices, lse, d_v, sm_scale=None):
+    """Shapes as in sparse_attn_fwd_interface, plus o/do [B, S, H, d_v] and lse [B, S, H].
+    Returns dq [B, S, H, d_v + d_tail] bf16, dkv [B, S_kv, G, d_v + d_tail] bf16 and delta [B, S, H] fp32
+    (rowsum(o * do), which the caller needs for the attention-sink gradient)."""
+    assert q.is_contiguous() and kv.is_contiguous() and indices.is_contiguous() and lse.is_contiguous()
     B, S, H, dim_plus_tail_dim = q.shape
     _, S_kv, kv_group, _ = kv.shape
     assert kv.shape[-1] == dim_plus_tail_dim
     assert kv.shape[0] == B
-    # dim should be assigned
-    D = 512
-
-    D_tail = dim_plus_tail_dim - D
+    D_tail = dim_plus_tail_dim - d_v
     topk = indices.shape[-1]
     assert indices.shape == (B, S, kv_group, topk)
     assert lse.shape == (B, S, H)
 
-    # Get kernels
-    preprocess_kernel = preprocess(B, S, H, D)
-    bwd_kernel = bwd(B, S, S_kv, H, D, D_tail, topk, kv_group, sm_scale, is_casual)
-    postprocess_kernel = postprocess(B, S_kv, D, D_tail, kv_group)
-
-    if delta is None:
-        delta = preprocess_kernel(o, do)
+    delta = preprocess(H, d_v)(o, do)
     dkv = torch.zeros_like(kv, dtype=torch.float32)
-    dq = bwd_kernel(q, kv, do, indices, lse, delta, dkv)
-    dkv = postprocess_kernel(dkv)
-
-    dq = dq.squeeze(0)
-    dkv = dkv.squeeze(0)
-
-    return dq, dkv
+    dq = bwd(H, d_v, D_tail, topk, kv_group, sm_scale)(q, kv, do, indices, lse, delta, dkv)
+    dkv = postprocess(d_v, D_tail, kv_group)(dkv)
+    return dq, dkv, delta
