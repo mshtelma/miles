@@ -1,3 +1,6 @@
 # Mirrored from examples/**/README.md by scripts/tools/sync_example_docs.py.
 # linguist-generated collapses these files in PR diffs; review the README instead.
 docs/examples/** linguist-generated=true
+
+# Unified diffs encode empty context lines as one space.
+docker/air/patches/*.patch whitespace=-blank-at-eol

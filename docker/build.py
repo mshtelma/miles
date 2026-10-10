@@ -7,6 +7,8 @@ Usage:
     python docker/build.py --variant cu13-x86 --image-tag dev --push      # single arch
     python docker/build.py --variant cu12-x86 --image-tag latest
     python docker/build.py --variant cu13 --image-tag dev --dry-run
+    python docker/build.py --variant air-glm53 --image-tag custom --custom-tag glm53 \
+        --image <registry>/miles-air --push                              # Databricks AI Runtime
 """
 
 import os
@@ -81,6 +83,16 @@ VARIANTS = {
             "TE_USE_WHEEL": "1",
         },
     },
+    # GLM-5.3-Flash on the Databricks AI Runtime (examples/glm5_3_flash/officeqa/air). Its downloads
+    # trust the host's CA bundle; push it to your own registry with --image.
+    "air-glm53": {
+        "image": "miles-air",
+        "platforms": ["linux/amd64"],
+        "tag_postfix": "",
+        "dockerfile": "docker/air/Dockerfile",
+        "build_args": {},
+        "secrets": {"host_ca": "/etc/ssl/certs/ca-certificates.crt"},
+    },
 }
 
 
@@ -101,12 +113,13 @@ def build_and_push(
     extra_build_args: list[str] | None = None,
     context: Path = REPO_ROOT,
     output: str = "",
+    image: str = "",
 ) -> None:
     extra_build_args = extra_build_args or []
     config = VARIANTS[variant]
     # A variant may pin its own Dockerfile (e.g. ROCm); otherwise use the CLI default.
     dockerfile = config.get("dockerfile", dockerfile)
-    image = config["image"]
+    image = image or config["image"]
     postfix = config.get("tag_postfix", "")
     platforms = config.get("platforms")
 
@@ -147,6 +160,9 @@ def build_and_push(
 
     cmd += ["--build-arg", "NO_PROXY=localhost,127.0.0.1"]
 
+    for secret_id, source in config.get("secrets", {}).items():
+        cmd += ["--secret", f"id={secret_id},src={source}"]
+
     # Variant-specific build args
     for key, value in config.get("build_args", {}).items():
         cmd += ["--build-arg", f"{key}={value}"]
@@ -177,6 +193,7 @@ class Variant(str, Enum):
     cu12_x86 = "cu12-x86"
     rocm724_mi35x = "rocm724-mi35x"
     rocm10_mi35x = "rocm10-mi35x"
+    air_glm53 = "air-glm53"
 
 
 class ImageTag(str, Enum):
@@ -195,6 +212,7 @@ def main(
     build_arg: list[str] = typer.Option([], help="Extra KEY=VALUE build-arg (repeatable)."),  # noqa: B008
     context: Path = typer.Option(REPO_ROOT, help="Repository build context, separate from this driver."),  # noqa: B008
     output: str = typer.Option("", help="Buildx exporter, e.g. type=oci,dest=/tmp/image,tar=false."),  # noqa: B008
+    image: str = typer.Option("", help="Image repository replacing the variant's, e.g. your registry."),  # noqa: B008
 ) -> None:
     build_and_push(
         variant.value,
@@ -206,6 +224,7 @@ def main(
         extra_build_args=build_arg,
         context=context.resolve(),
         output=output,
+        image=image,
     )
 
 

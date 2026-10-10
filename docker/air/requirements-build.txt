@@ -1,0 +1,10 @@
+# Exact build-stage Python inputs in radixark/miles@sha256:64f67cb1d00ed89c2244defd7a5d99d06a94ef2c2217f9fd0ad9d5519ed1db2d.
+# CMake 3.31.1 and nvcc 13.0.88 are checked separately by docker/air/Dockerfile.
+# FLA v0.5.2 is built from 9c8e42e762fce087c27b673af4922795d9edb85e with docker/patch/fla_kda_hoist_next_power_of_2.patch.
+# SGLang 9a26e7490f8db83a7fde29ae38f3bbff50ba035c receives the SHA-256-pinned backport patch before its kernel wheel is built.
+scikit-build-core==1.0.3
+ninja==1.13.0
+setuptools==84.0.0
+wheel==0.48.0
+torch==2.13.0+cu130
+triton==3.7.1

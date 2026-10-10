@@ -1,0 +1,28 @@
+# Train on eight nodes; the same RUN_ID resumes the newest COMPLETE save.
+experiment_name: glm53-flash-officeqa
+compute:
+  num_accelerators: 64
+  accelerator_type: GPU_8xB300
+environment:
+  docker_image:
+    url: REGISTRY/miles-air@sha256:DIGEST
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../../..  # relative to this YAML
+max_retries: 0
+timeout_minutes: 2880
+env_variables:
+  VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
+  RUN_ID: glm53-flash-officeqa
+  INPUT_MANIFEST: ""  # empty: inputs/latest
+  REFERENCE_ROOT: ""  # empty: ckpt/latest
+  TRAIN_ARGS: --save-hf --mlflow-experiment glm53-flash-officeqa
+command: |
+  set -euo pipefail
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH:/root/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}"
+  export HF_HUB_DISABLE_XET=1 PYTHONFAULTHANDLER=1
+  python -m tools.air.node_entry --volume-root "$VOLUME_ROOT" --run-id "$RUN_ID" \
+    --input-manifest "$INPUT_MANIFEST" --reference-root "$REFERENCE_ROOT" \
+    --launcher-path examples.glm5_3_flash.officeqa.air.recipe.make_launch --launcher-args="$TRAIN_ARGS"

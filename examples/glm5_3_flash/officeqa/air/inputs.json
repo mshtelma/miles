@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "artifacts": [
+    {
+      "kind": "model",
+      "name": "GLM-5.3-Flash",
+      "repo": "zai-org/GLM-5.3-Flash",
+      "revision": "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# Build OfficeQA data and publish pinned HF weights plus an input manifest.
+experiment_name: glm53-flash-officeqa
+compute:
+  num_accelerators: 8
+  accelerator_type: GPU_8xB300
+environment:
+  docker_image:
+    url: REGISTRY/miles-air@sha256:DIGEST
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../../..  # relative to this YAML
+max_retries: 0
+timeout_minutes: 360
+env_variables:
+  VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
+  QUESTIONS_CSV: /Volumes/CATALOG/SCHEMA/VOLUME/officeqa/officeqa_full.csv
+  CORPUS_DIR: /Volumes/CATALOG/SCHEMA/VOLUME/officeqa
+command: |
+  set -euo pipefail
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH:/root/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}"
+  test "$NUM_NODES" -eq 1
+  WORK=/tmp/miles-air/prepare
+  python -m examples.glm5_3_flash.officeqa.prepare_data --questions "$QUESTIONS_CSV" \
+    --corpus-dir "$CORPUS_DIR" --out-dir "$WORK/officeqa"
+  python -m tools.air.stage_models prepare --spec examples/glm5_3_flash/officeqa/air/inputs.json \
+    --dataset officeqa="$WORK/officeqa" --volume-root "$VOLUME_ROOT"
