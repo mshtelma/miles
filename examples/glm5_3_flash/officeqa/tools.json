@@ -1,0 +1,172 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "search_documents",
+      "description": "Search the Treasury Bulletin corpus and return the most relevant passages, each with its source document and YYYY-MM bulletin date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "What to look for, e.g. 'national defense expenditures 1940'."
+          },
+          "top_k": {
+            "type": "integer",
+            "description": "How many passages to return (default 6; max 20)."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "grep_documents",
+      "description": "Grep for an exact text pattern over the Treasury Bulletin files (like grep). The most reliable way to pin a row label/category/value. Returns 'file:line: text'. Substring (default, case-insensitive) or regex.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Text or regex, e.g. 'National defense' or '2,602'."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "Optional file to search within."
+          },
+          "year": {
+            "type": "string",
+            "description": "Optional 4-digit year filter (ignored if file_name set)."
+          },
+          "regex": {
+            "type": "boolean",
+            "description": "If true, treat pattern as a regex (default false)."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_document",
+      "description": "Read a slice of one Treasury Bulletin document by exact file name (financial tables are Markdown). Lines are numbered; page on by increasing start_line.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "Document file name, e.g. 'treasury_bulletin_1940_06.txt'."
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "0-based line to start from (default 0)."
+          },
+          "num_lines": {
+            "type": "integer",
+            "description": "How many lines to return (default 100; capped at 400)."
+          }
+        },
+        "required": [
+          "file_name"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_documents",
+      "description": "List available Treasury Bulletin documents, optionally filtered by 4-digit year.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "string",
+            "description": "Optional 4-digit year, e.g. '1940'. Empty lists all (capped)."
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "compute",
+      "description": "Execute Python (numpy/pandas available) for calculations and table analysis; returns stdout and the last expression's value. Use for ALL arithmetic over retrieved figures. Fresh sandbox each call.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Self-contained Python, e.g. 'print(sum([132,129,143,159,154,153,177,200,219,287,376,473]))'."
+          }
+        },
+        "required": [
+          "code"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "submit_report",
+      "description": "Finish the task: submit your final answer and the supporting path. This is the ONLY way to end -- do NOT print the report as text. Cite only observation ids (obs_N) that were actually delivered to you.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Only the final value, in the units the question asks, or 'DATA NOT AVAILABLE'. No working or other figures: those belong in the path claims."
+          },
+          "path": {
+            "type": "array",
+            "description": "Supporting steps; [] only when answer is DATA NOT AVAILABLE.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "short unique step id"
+                },
+                "observation": {
+                  "type": "string",
+                  "description": "an obs_N you actually received"
+                },
+                "claim": {
+                  "type": "string",
+                  "description": "what that observation shows, or the calculation"
+                },
+                "depends_on": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "earlier step ids whose figures a compute step used"
+                }
+              },
+              "required": [
+                "id",
+                "observation",
+                "claim"
+              ]
+            }
+          }
+        },
+        "required": [
+          "answer",
+          "path"
+        ]
+      }
+    }
+  }
+]

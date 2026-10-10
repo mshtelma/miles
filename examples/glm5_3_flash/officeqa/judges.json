@@ -1,0 +1,14 @@
+{
+  "endpoints": [
+    "databricks-claude-opus-4-6",
+    "databricks-claude-sonnet-4-6"
+  ],
+  "temperature": 0.0,
+  "primary_first": true,
+  "max_concurrency": 16,
+  "max_tokens": 4096,
+  "request_timeout_s": 180,
+  "deadline_s": 300,
+  "slot_wait_s": 60,
+  "cooldown_s": 20
+}
