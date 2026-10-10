@@ -4,6 +4,7 @@ import re
 import torch
 
 from miles.kernels.quant.fp8_blockwise import blockwise_cast_to_fp8_triton
+from miles.utils.fp8_policy import FP8SkipPolicy, build_fp8_skip_policy
 
 from ...sglang import (
     per_block_cast_to_fp8,
@@ -13,12 +14,40 @@ from ...sglang import (
 )
 
 
-def quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config):
+# Set by an HF-checkpoint writer: keep the checkpoint's own FP32 block scales. Weight sync to SGLang
+# instead follows the engine's DeepGEMM layout (UE8M0 exponents packed four per int32), which only the
+# running engine reads; a checkpoint loaded from disk needs the FP32 scales.
+CHECKPOINT_SCALES_KEY = "miles_checkpoint_scales"
+
+
+def checkpoint_quantization_config(quantization_config):
+    """The quantization config an HF-checkpoint writer passes, so FP8 scales keep the checkpoint format."""
+    if not quantization_config or quantization_config.get("quant_method") != "fp8":
+        return quantization_config
+    return {**quantization_config, CHECKPOINT_SCALES_KEY: True}
+
+
+def _quantize_unless_kept(
+    args, converted_named_params, *, weight_block_size, skip_policy: FP8SkipPolicy, checkpoint_scales=False
+):
+    quantized = []
+    for hf_name, param in converted_named_params:
+        if skip_policy.keeps(hf_name):
+            quantized.append((hf_name, param))
+        else:
+            quantized.extend(_quantize_param(args, hf_name, param, weight_block_size, checkpoint_scales))
+    return quantized
+
+
+def quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config, *, skip_policy=None):
     assert quantization_config["quant_method"] == "fp8"
     fmt = quantization_config.get("fmt", "e4m3")
     assert fmt == "e4m3", f"Unsupported FP8 format: {fmt}"
     assert quantization_config["activation_scheme"] == "dynamic"
     weight_block_size = quantization_config.get("weight_block_size", None)
+    if skip_policy is None:
+        skip_policy = build_fp8_skip_policy(quantization_config)
+    checkpoint_scales = bool(quantization_config.get(CHECKPOINT_SCALES_KEY, False))
 
     decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
     match = re.match(decoder_layers_pattern, megatron_name)
@@ -43,15 +72,15 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
             "linear_fc1",
             "linear_fc2",
         ]:
-            quantize_named_params = []
-            for converted_name, param in converted_named_params:
-                # skip bf16 weight_scale and input_scale
-                # TODO: find a clearer way.
-                if converted_name.endswith("_scale"):
-                    continue
-                quantize_named_params.extend(_quantize_param(args, converted_name, param, weight_block_size))
-
-            return quantize_named_params
+            # Existing BF16 expert scale tensors are not receiver weights.
+            weights = [(name, param) for name, param in converted_named_params if not name.endswith("_scale")]
+            return _quantize_unless_kept(
+                args,
+                weights,
+                weight_block_size=weight_block_size,
+                skip_policy=skip_policy,
+                checkpoint_scales=checkpoint_scales,
+            )
 
     # shared expert
     shared_expert_pattern = r"mlp.shared_experts\.(.+)"
@@ -62,11 +91,13 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
             "linear_fc1.weight",
             "linear_fc2.weight",
         ]:
-            quantize_named_params = []
-            for converted_name, param in converted_named_params:
-                quantize_named_params.extend(_quantize_param(args, converted_name, param, weight_block_size))
-
-            return quantize_named_params
+            return _quantize_unless_kept(
+                args,
+                converted_named_params,
+                weight_block_size=weight_block_size,
+                skip_policy=skip_policy,
+                checkpoint_scales=checkpoint_scales,
+            )
 
     fp8_param_names = [
         "self_attention.linear_proj.weight",
@@ -99,22 +130,24 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
         )
 
     if rest in fp8_param_names:
-        quantize_named_params = []
-        for converted_name, param in converted_named_params:
-            quantize_named_params.extend(_quantize_param(args, converted_name, param, weight_block_size))
-
-        return quantize_named_params
+        return _quantize_unless_kept(
+            args,
+            converted_named_params,
+            weight_block_size=weight_block_size,
+            skip_policy=skip_policy,
+            checkpoint_scales=checkpoint_scales,
+        )
 
     # for other parameters, we just return the original converted_named_params
     return converted_named_params
 
 
-def _quantize_param(args, name, weight, weight_block_size):
+def _quantize_param(args, name, weight, weight_block_size, checkpoint_scales=False):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
     if weight_block_size is not None:
-        if _get_scale_format(args, name, weight_block_size) == "ue8m0":
+        if not checkpoint_scales and _get_scale_format(args, name, weight_block_size) == "ue8m0":
             qweight, scale = quant_weight_ue8m0(weight, weight_block_size=weight_block_size)
             scale = transform_scale_ue8m0(scale, mn=qweight.shape[-2])
         # TODO: this [128, 128] is hacky. need improve

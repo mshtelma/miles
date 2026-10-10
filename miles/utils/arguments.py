@@ -2590,14 +2590,20 @@ def parse_args(add_custom_arguments=None, entry="train", preprocess_args=None):
 
         args = megatron_parse_args(extra_args_provider=add_miles_arguments)
         args.compress_ratios = None
+        args.rollout_indexer_topk_num_streams = None
         if args.hf_checkpoint:
             hf_config = load_hf_config(args.hf_checkpoint)
             args.compress_ratios = getattr(hf_config, "compress_ratios", None)
             hf_validate_args(args, hf_config)
 
             if is_dsa(hf_config):
-                args.indexer_rope_interleave = bool(getattr(hf_config, "indexer_rope_interleave", False))
+                getter = getattr(hf_config, "get_text_config", None)
+                text_config = (getter() if callable(getter) else getattr(hf_config, "text_config", None)) or hf_config
+                args.indexer_rope_interleave = bool(getattr(text_config, "indexer_rope_interleave", False))
                 logger.info(f"Setting indexer_rope_interleave: {args.indexer_rope_interleave} into args")
+                linear_attn_config = getattr(text_config, "linear_attn_config", None)
+                kda_layers = set((linear_attn_config or {}).get("kda_layers") or [])
+                args.rollout_indexer_topk_num_streams = text_config.num_hidden_layers - len(kda_layers)
 
         # TODO: unify this .rank and .world_size w/ indep_dp logics
         args.rank = 0
@@ -3622,6 +3628,8 @@ def hf_validate_args(args, hf_config):
     model_name = (args.model_name or "").lower().replace("-", "").replace("_", "")
     if (hf_config.model_type == "deepseek_v4" or "deepseekv4" in model_name) and args.context_parallel_size > 1:
         assert args.allgather_cp, "zigzag CP is not supported for DeepSeek V4."
+    if model_name in {"glm5next", "glm53flash"} and args.context_parallel_size > 1 and not args.allgather_cp:
+        raise ValueError("GLM-5.3-Flash CP requires contiguous allgather-CP shards")
 
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),

@@ -2,6 +2,7 @@ from .deepseekv3 import convert_deepseekv3_to_hf
 from .deepseekv4 import convert_deepseekv4_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
+from .glm5_next import convert_glm5_next_to_hf
 from .inkling import convert_inkling_to_hf
 from .kimi_k3 import convert_kimi_k3_to_hf
 from .kimi_vl import convert_kimi_k25_to_hf, convert_kimivl_to_hf
@@ -22,18 +23,37 @@ def postprocess_hf_param(args, megatron_param_name, hf_param_name, param):
 
 
 # TODO optimize code details
-def convert_to_hf(args, model_name, name, param, quantization_config=None, packed_weight_basenames=None):
+def convert_to_hf(
+    args,
+    model_name,
+    name,
+    param,
+    quantization_config=None,
+    packed_weight_basenames=None,
+    *,
+    fp8_skip_policy=None,
+    glm5_next_export=None,
+):
     param = remove_padding(name, param, args.vocab_size)
 
-    converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
+    converted_named_tensors = _convert_to_hf_core(args, model_name, name, param, glm5_next_export=glm5_next_export)
 
-    return quantize_params(args, name, converted_named_tensors, quantization_config, packed_weight_basenames)
+    return quantize_params(
+        args,
+        name,
+        converted_named_tensors,
+        quantization_config,
+        packed_weight_basenames,
+        fp8_skip_policy=fp8_skip_policy,
+    )
 
 
 # TODO optimize code details
-def _convert_to_hf_core(args, model_name, name, param):
+def _convert_to_hf_core(args, model_name, name, param, *, glm5_next_export=None):
     model_name = model_name.lower()
-    if (
+    if "glm5_next" in model_name or "glm5next" in model_name:
+        converted_named_tensors = convert_glm5_next_to_hf(args, name, param, export_state=glm5_next_export)
+    elif (
         "glm4moelite" in model_name
         or "deepseekv3" in model_name
         or "glmmoedsa" in model_name

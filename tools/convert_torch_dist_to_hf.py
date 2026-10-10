@@ -12,6 +12,7 @@ import torch.distributed.checkpoint as dist_cp
 from typing_extensions import override
 
 from miles.backends.megatron_utils.megatron_to_hf import convert_to_hf, remove_padding
+from miles.backends.megatron_utils.megatron_to_hf.glm5_next import Glm5NextExportState
 from miles.utils.hf_utils.config import load_hf_config
 
 
@@ -102,6 +103,20 @@ def get_named_params(args, state_dict):
         yield from get_layer_param(args, name, param)
 
 
+def _iter_converted_tensors(args, model_name, state_dict, vocab_size):
+    export_state = Glm5NextExportState() if "glm5next" in model_name.lower().replace("_", "") else None
+    try:
+        for name, param in get_named_params(args, state_dict):
+            if vocab_size:
+                param = remove_padding(name, param, vocab_size)
+            yield from convert_to_hf(args, model_name, name, param, glm5_next_export=export_state)
+        if export_state is not None:
+            export_state.finish()
+    finally:
+        if export_state is not None:
+            export_state.abort()
+
+
 def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
     # for miles update_weight compatible
     args.sglang_enable_ep_moe = False
@@ -112,18 +127,14 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_siz
     current_size = 0
     total_size = 0
     modeltensors = [{}]
-    for name, param in get_named_params(args, state_dict):
-        if vocab_size:
-            param = remove_padding(name, param, vocab_size)
-        converted_named_tensors = convert_to_hf(args, model_name, name, param)
-        for converted_name, converted_param in converted_named_tensors:
-            tensor_size = converted_param.numel() * converted_param.element_size()
-            if tensor_size + current_size > chunk_size:
-                modeltensors.append({})
-                current_size = 0
-            modeltensors[-1][converted_name] = converted_param
-            current_size += tensor_size
-            total_size += tensor_size
+    for converted_name, converted_param in _iter_converted_tensors(args, model_name, state_dict, vocab_size):
+        tensor_size = converted_param.numel() * converted_param.element_size()
+        if tensor_size + current_size > chunk_size:
+            modeltensors.append({})
+            current_size = 0
+        modeltensors[-1][converted_name] = converted_param
+        current_size += tensor_size
+        total_size += tensor_size
 
     metadata = {"metadata": {"total_size": total_size}, "weight_map": {}}
 
@@ -201,6 +212,8 @@ if __name__ == "__main__":
     print(f"loading model from {args.input_dir}")
     t = time.time()
     megatron_args = torch.load(os.path.join(args.input_dir, "common.pt"), weights_only=False)["args"]
+    if args.origin_hf_dir:
+        megatron_args.hf_checkpoint = args.origin_hf_dir
     dist_cp.state_dict_loader._load_state_dict(
         state_dict,
         storage_reader=WrappedStorageReader(args.input_dir),

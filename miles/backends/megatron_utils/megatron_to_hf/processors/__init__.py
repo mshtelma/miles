@@ -14,11 +14,21 @@ __all__ = [
 ]
 
 
-def quantize_params(args, megatron_name, converted_named_params, quantization_config, packed_weight_basenames=None):
+def quantize_params(
+    args,
+    megatron_name,
+    converted_named_params,
+    quantization_config,
+    packed_weight_basenames=None,
+    *,
+    fp8_skip_policy=None
+):
     if quantization_config is None:
         return converted_named_params
     elif quantization_config["quant_method"] == "fp8":
-        return quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config)
+        return quantize_params_fp8(
+            args, megatron_name, converted_named_params, quantization_config, skip_policy=fp8_skip_policy
+        )
     elif quantization_config["quant_method"] == "mxfp8":
         return quantize_params_mxfp8(args, megatron_name, converted_named_params, quantization_config)
     elif quantization_config.get("quant_algo") == "NVFP4" or quantization_config["quant_method"] == "nvfp4":

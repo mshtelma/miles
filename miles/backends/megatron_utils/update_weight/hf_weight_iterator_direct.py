@@ -15,6 +15,7 @@ from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.types import ParamInfo
 
 from ..megatron_to_hf import convert_to_hf
+from ..megatron_to_hf.glm5_next import Glm5NextExportState
 from ..named_weights import named_params_and_buffers
 from ..sglang import monkey_patch_torch_reductions
 
@@ -35,30 +36,39 @@ class HfWeightIteratorDirect(MegatronHfWeightIteratorBase):
 
     def _iter_hf_param_units(self, weights, *, materialize):
         rank = dist.get_rank()
+        glm5_next_export = (
+            Glm5NextExportState() if materialize and "glm5next" in self.model_name.lower().replace("_", "") else None
+        )
 
         pbar = tqdm(
             total=len(self._non_expert_batches) + len(self._expert_batches),
             disable=rank != 0,
             desc="Update weights",
         )
-        for param_infos in self._non_expert_batches:
-            named_params = _materialize_non_expert_batch(
-                self.args, param_infos, weights, gather_pp=self.placement.gather_pp
-            )
-            if materialize:
-                yield from self._convert_to_hf_param_units(named_params)
-            del named_params
-            pbar.update(1)
-        for param_infos in self._expert_batches:
-            named_params = _materialize_expert_batch(
-                self.args, param_infos, weights, gather_pp=self.placement.gather_pp
-            )
-            if materialize:
-                yield from self._convert_to_hf_param_units(named_params)
-            del named_params
-            pbar.update(1)
-        pbar.close()
-        yield from _iter_mm_tower_units(self.args, materialize=materialize)
+        try:
+            for param_infos in self._non_expert_batches:
+                named_params = _materialize_non_expert_batch(
+                    self.args, param_infos, weights, gather_pp=self.placement.gather_pp
+                )
+                if materialize:
+                    yield from self._convert_to_hf_param_units(named_params, glm5_next_export=glm5_next_export)
+                del named_params
+                pbar.update(1)
+            for param_infos in self._expert_batches:
+                named_params = _materialize_expert_batch(
+                    self.args, param_infos, weights, gather_pp=self.placement.gather_pp
+                )
+                if materialize:
+                    yield from self._convert_to_hf_param_units(named_params, glm5_next_export=glm5_next_export)
+                del named_params
+                pbar.update(1)
+            if glm5_next_export is not None:
+                glm5_next_export.finish()
+            yield from _iter_mm_tower_units(self.args, materialize=materialize)
+        finally:
+            pbar.close()
+            if glm5_next_export is not None:
+                glm5_next_export.abort()
 
     def _export_pp_local_lora(self, adapter):
         assert adapter is None, "multi-LoRA export requires --megatron-to-hf-mode bridge"
@@ -73,11 +83,20 @@ class HfWeightIteratorDirect(MegatronHfWeightIteratorBase):
             return export_inkling_lora_hf_named(self.model)
         raise NotImplementedError(f"Raw LoRA export is not implemented for model {self.model_name!r}")
 
-    def _convert_to_hf_param_units(self, named_params: Sequence[tuple[str, torch.Tensor]]):
+    def _convert_to_hf_param_units(
+        self, named_params: Sequence[tuple[str, torch.Tensor]], *, glm5_next_export: Glm5NextExportState | None = None
+    ):
         for name, param in named_params:
             yield list(
                 convert_to_hf(
-                    self.args, self.model_name, name, param, self.quantization_config, self.packed_weight_basenames
+                    self.args,
+                    self.model_name,
+                    name,
+                    param,
+                    self.quantization_config,
+                    self.packed_weight_basenames,
+                    fp8_skip_policy=self.fp8_skip_policy,
+                    glm5_next_export=glm5_next_export,
                 )
             )
 

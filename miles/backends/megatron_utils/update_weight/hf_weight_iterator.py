@@ -20,6 +20,7 @@ from miles.backends.training_utils.weight_update.hf_weight_iterator import (
     resolve_placement,
 )
 from miles.backends.training_utils.weight_update.hf_weight_iterator.atomic_groups import get_hf_atomic_update_groups
+from miles.utils.fp8_policy import build_fp8_skip_policy
 from miles.utils.lora.utils import is_lora_weight_name
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,15 @@ class MegatronHfWeightIteratorBase(HfWeightIteratorBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fp8_skip_policy = None
+        if self.quantization_config is not None and self.quantization_config["quant_method"] == "fp8":
+            model_name = (
+                (getattr(self.args, "model_name", None) or self.model_name).lower().replace("-", "").replace("_", "")
+            )
+            is_glm53 = "glm5next" in model_name or "glm53flash" in model_name
+            if is_glm53 and self.quantization_config.get("weight_block_size") != [128, 128]:
+                raise ValueError("GLM-5.3 FP8 export requires 128 x 128 checkpoint weight blocks")
+            self.fp8_skip_policy = build_fp8_skip_policy(self.quantization_config, require_exclusions=is_glm53)
         self.packed_weight_basenames = (
             get_packed_weight_basenames(self.args.hf_checkpoint)
             if self.quantization_config is not None
