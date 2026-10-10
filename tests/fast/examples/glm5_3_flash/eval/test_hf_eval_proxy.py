@@ -1,4 +1,4 @@
-"""The proxy reproduces the session server's token budget and pins each trajectory to one server."""
+"""The proxy reproduces the training session server's token budget, sampling and stop-token handling."""
 
 import asyncio
 import json
@@ -78,21 +78,15 @@ async def _post(url: str, trajectory: str, body: dict) -> tuple[int, dict]:
             return response.status, await response.json()
 
 
-async def _serve(urls: list[str], *, tokens: int = 10, max_seq_len: int = 150_000, capture: int = 0):
-    chat = proxy.ChatProxy(
-        urls,
-        count_prompt_tokens=lambda messages, tools: tokens,
-        max_seq_len=max_seq_len,
-        connect_retry_delay_s=0.0,
-        capture_trajectories=capture,
-    )
+async def _serve(server_url: str, *, tokens: int = 10, max_seq_len: int = 150_000):
+    chat = proxy.ChatProxy(server_url, count_prompt_tokens=lambda messages, tools: tokens, max_seq_len=max_seq_len)
     runner, url = await proxy.serve(chat)
     return chat, runner, url
 
 
 async def test_turn_budget_is_capped_to_the_context_left_and_the_body_passes_through() -> None:
     upstream = _Upstream()
-    chat, runner, url = await _serve([await upstream.start()], tokens=140_000)
+    chat, runner, url = await _serve(await upstream.start(), tokens=140_000)
     try:
         status, body = await _post(url, "t1", {"messages": [{"role": "user", "content": "q"}], "max_tokens": 16384})
     finally:
@@ -108,7 +102,7 @@ async def test_turn_budget_is_capped_to_the_context_left_and_the_body_passes_thr
 
 async def test_no_budget_left_answers_the_session_servers_422_without_calling_a_server() -> None:
     upstream = _Upstream()
-    chat, runner, url = await _serve([await upstream.start()], tokens=150_000)
+    chat, runner, url = await _serve(await upstream.start(), tokens=150_000)
     try:
         status, body = await _post(url, "t1", {"messages": [], "max_tokens": 16384})
     finally:
@@ -121,7 +115,7 @@ async def test_no_budget_left_answers_the_session_servers_422_without_calling_a_
 
 async def test_a_request_without_a_budget_gets_the_context_left() -> None:
     upstream = _Upstream()
-    _, runner, url = await _serve([await upstream.start()], tokens=149_000)
+    _, runner, url = await _serve(await upstream.start(), tokens=149_000)
     try:
         await _post(url, "t1", {"messages": []})
     finally:
@@ -136,10 +130,9 @@ async def test_prior_assistant_turns_lose_their_trailing_stop_token_before_rende
     upstream = _Upstream()
     seen = []
     chat = proxy.ChatProxy(
-        [await upstream.start()],
+        await upstream.start(),
         count_prompt_tokens=lambda messages, tools: seen.append(messages) or 10,
         max_seq_len=150_000,
-        connect_retry_delay_s=0.0,
     )
     runner, url = await proxy.serve(chat)
     call = {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
@@ -164,7 +157,7 @@ async def test_prior_assistant_turns_lose_their_trailing_stop_token_before_rende
 async def test_missing_top_p_and_top_k_get_full_support_and_set_ones_pass_through() -> None:
     # The model's generation-config top_p would leave the training sampling and crash the server.
     upstream = _Upstream()
-    _, runner, url = await _serve([await upstream.start()])
+    _, runner, url = await _serve(await upstream.start())
     try:
         await _post(url, "t1", {"messages": [], "temperature": 1.0})
         await _post(url, "t2", {"messages": [], "top_p": 0.9, "top_k": 20})
@@ -177,40 +170,9 @@ async def test_missing_top_p_and_top_k_get_full_support_and_set_ones_pass_throug
     assert (kept["top_p"], kept["top_k"]) == (0.9, 20)
 
 
-async def test_trajectories_stick_to_one_server_and_balance_across_servers() -> None:
-    first, second = _Upstream(), _Upstream()
-    chat, runner, url = await _serve([await first.start(), await second.start()])
-    try:
-        for trajectory in ("a", "b", "a", "a", "b"):
-            await _post(url, trajectory, {"messages": []})
-        chat.finish("a")
-        await _post(url, "c", {"messages": []})  # "a" freed the first server
-    finally:
-        await runner.cleanup()
-        await first.runner.cleanup()
-        await second.runner.cleanup()
-
-    engines = {trajectory: {turn["engine"] for turn in chat.turns(trajectory)} for trajectory in "abc"}
-    assert engines == {"a": {0}, "b": {1}, "c": {0}}
-    assert (len(first.received), len(second.received)) == (4, 2)
-
-
-async def test_a_dead_server_is_skipped_and_its_trajectory_repinned() -> None:
-    live = _Upstream()
-    chat, runner, url = await _serve([_dead_url(), await live.start()])
-    try:
-        status, _ = await _post(url, "a", {"messages": []})  # pinned to the dead server first
-    finally:
-        await runner.cleanup()
-        await live.runner.cleanup()
-
-    assert status == 200 and len(live.received) == 1
-    assert chat.pool.dead == [0] and chat.turns("a")[0]["engine"] == 1
-
-
 async def test_every_turn_gets_its_own_connection_so_an_expired_keep_alive_never_drops_it() -> None:
     upstream = _KeepAliveExpiringUpstream()
-    _, runner, url = await _serve([await upstream.start()])
+    _, runner, url = await _serve(await upstream.start())
     try:
         statuses = [(await _post(url, "a", {"messages": []}))[0] for _ in range(3)]
     finally:
@@ -222,14 +184,14 @@ async def test_every_turn_gets_its_own_connection_so_an_expired_keep_alive_never
     assert (upstream.served, upstream.dropped) == (3, 0)
 
 
-async def test_every_server_dead_is_a_502_the_agent_reports_as_lost() -> None:
-    chat, runner, url = await _serve([_dead_url()])
+async def test_an_unreachable_server_is_a_502_the_agent_reports_as_lost() -> None:
+    chat, runner, url = await _serve(_dead_url())
     try:
         status, body = await _post(url, "a", {"messages": []})
     finally:
         await runner.cleanup()
 
-    assert status == 502 and ("dead" in body["error"]["message"] or "unreachable" in body["error"]["message"])
+    assert status == 502 and "SGLang request failed" in body["error"]["message"]
     assert chat.summary()["upstream_errors"] == 1
 
 
@@ -239,7 +201,7 @@ async def test_a_render_failure_is_loud_not_a_zero_token_count() -> None:
     def broken(messages, tools):
         raise ValueError("template error")
 
-    chat = proxy.ChatProxy([await upstream.start()], count_prompt_tokens=broken, max_seq_len=150_000)
+    chat = proxy.ChatProxy(await upstream.start(), count_prompt_tokens=broken, max_seq_len=150_000)
     runner, url = await proxy.serve(chat)
     try:
         status, body = await _post(url, "a", {"messages": []})
@@ -252,7 +214,7 @@ async def test_a_render_failure_is_loud_not_a_zero_token_count() -> None:
 
 async def test_server_errors_pass_through_and_count_mismatches_are_reported() -> None:
     upstream = _Upstream(payload={**_OK, "usage": {"prompt_tokens": 11, "completion_tokens": 2}})
-    chat, runner, url = await _serve([await upstream.start()], tokens=10, capture=1)
+    chat, runner, url = await _serve(await upstream.start(), tokens=10)
     try:
         await _post(url, "a", {"messages": []})
         upstream.status, upstream.payload = 400, {"error": {"message": "bad"}}
@@ -264,4 +226,3 @@ async def test_server_errors_pass_through_and_count_mismatches_are_reported() ->
     assert status == 400 and body == {"error": {"message": "bad"}}
     summary = chat.summary()
     assert summary["render_count_mismatch_turns"] == 1 and summary["served_turns"] == 1
-    assert list(chat.captured) == ["a"] and chat.captured["a"][0]["request"]["max_tokens"] == 149_990

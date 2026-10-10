@@ -7,7 +7,7 @@ Four AIR jobs take you from the published model to an evaluated checkpoint. Run 
 | `prepare.yaml` | 1 | Builds the OfficeQA prompt files, downloads GLM-5.3-Flash from Hugging Face, and publishes both. | `models/`, `datasets/`, the input manifest `inputs/<sha256>.json`, and `inputs/latest` |
 | `convert.yaml` | 1 | Converts the HF checkpoint to the Megatron `torch_dist` reference the trainer loads. | `ckpt/glm5.3-flash_torch_dist_<attempt>/` and `ckpt/latest` |
 | `train.yaml` | 8 | Fully async DAPO on OfficeQA at 150K tokens: four nodes train, four serve the policy with SGLang. | `runs/<RUN_ID>/checkpoints/<attempt>/iter_<step>/`, each save with a drop-in HF checkpoint under `iter_<step>/hf` |
-| `eval.yaml` | 1 or more | Serves an HF checkpoint with standalone SGLang and scores the held-out questions with the training agent, tools and reward. | `runs/<EVAL_RUN_ID>/attempts/<attempt>/eval/` |
+| `eval.yaml` | 1 | Serves an HF checkpoint with standalone SGLang and scores the held-out questions with the training agent, tools and reward. | `runs/<EVAL_RUN_ID>/attempts/<attempt>/eval/` |
 
 Each job finds the previous job's output through `inputs/latest` and `ckpt/latest`, so the defaults
 chain. To pin other inputs, set `INPUT_MANIFEST` or `REFERENCE_ROOT` instead. A job's attempt is its
@@ -116,13 +116,11 @@ air -p <profile> run examples/glm5_3_flash/officeqa/air/eval.yaml --override $CO
 ```
 
 `HF_SOURCE=checkpoint:` accepts only complete saves whose HF export passed its checks
-(`iter_<step>/hf_export.json`). More nodes (`compute.num_accelerators=16`, ...) add SGLang servers.
-`EVAL_ARGS` takes `examples/glm5_3_flash/officeqa/eval/entry.py` flags such as `--samples-per-prompt 4`
-or `--limit-questions 3`.
+(`iter_<step>/hf_export.json`). `EVAL_ARGS` takes `examples/glm5_3_flash/officeqa/eval/entry.py` flags
+such as `--samples-per-prompt 4` or `--limit-questions 3`.
 
 Each eval writes `eval_results.json` (the rewards per question), `summary.json` (pass@k, questions
-solved, lost trajectories), `trajectories.jsonl` and a few full transcripts. The server logs are
-published beside them.
+solved, lost trajectories), `trajectories.jsonl` and the SGLang server's log.
 
 ## Things to know about AIR
 

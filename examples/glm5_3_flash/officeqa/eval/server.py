@@ -1,8 +1,8 @@
-"""Standalone SGLang launch and startup checks against the training engine settings."""
+"""Standalone SGLang launch with the training engine settings."""
 
-import ast
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -14,14 +14,12 @@ import httpx
 TEMPLATE_KWARGS = {"clear_thinking": False, "enable_thinking": True}
 SERVED_MODEL_NAME = "glm53-eval"
 DEFAULT_PORT = 30000
-PARITY_FIXTURE = Path(__file__).resolve().parent / "engine_parity.json"
 # What the recipe exports to its engines (scripts/run_glm5_3_flash.py, _env_vars).
 SERVER_ENV = {
     "SGLANG_HEALTH_CHECK_TIMEOUT": "120",
     "SGLANG_RETURN_ORIGINAL_LOGPROB": "0",
     "TORCHINDUCTOR_COMPILE_THREADS": "1",
 }
-_SERVER_ARGS_MARKER = "server_args=ServerArgs("
 # Full-support sampling, as every training request sets it. A request that omits these gets the model's
 # generation-config top_p (sampling_defaults='model'), which differs from training and, on this image,
 # JIT-compiles a flashinfer kernel that fails for a missing curand.h and crashes every TP rank.
@@ -123,58 +121,15 @@ def wait_ready(url: str, process: subprocess.Popen, *, timeout_s: float, poll_s:
         time.sleep(poll_s)
 
 
-def read_server_args(log_text: str) -> dict:
-    """Parse the last ``server_args=ServerArgs(...)`` line SGLang logged at startup."""
-    start = log_text.rfind(_SERVER_ARGS_MARKER)
-    if start < 0:
-        raise ValueError("the SGLang log has no server_args=ServerArgs(...) line")
-    body = log_text[start + len(_SERVER_ARGS_MARKER) :]
-    return dict(_top_level_fields(body))
-
-
-def _top_level_fields(body: str):
-    """Yield ``key=value`` pairs of a dataclass repr, tracking quotes and bracket depth."""
-    key, start, depth, quote, index = None, 0, 0, None, 0
-    while index < len(body):
-        char = body[index]
-        if quote:
-            if char == "\\":
-                index += 1
-            elif char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char in "([{":
-            depth += 1
-        elif char in ")]}" and depth:
-            depth -= 1
-        elif char == "=" and depth == 0 and key is None:
-            key, start = body[start:index].strip(), index + 1
-        elif char in ",)" and depth == 0:
-            if key is not None:
-                yield key, _literal(body[start:index].strip())
-            key, start = None, index + 1
-            if char == ")":
-                return
-        index += 1
-    raise ValueError("the ServerArgs line is truncated")
-
-
-def _literal(text: str):
+def stop(process: subprocess.Popen | None) -> None:
+    """Stop the server's process group: SIGTERM, then SIGKILL after 30 s."""
+    if process is None or process.poll() is not None:
+        return
     try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
-        return text  # e.g. an enum or object repr; compared as text
-
-
-def parity_mismatches(server_args: dict, fixture_path: Path = PARITY_FIXTURE) -> list[str]:
-    """Every pinned engine setting the server resolved differently, as readable lines."""
-    expected = json.loads(fixture_path.read_text(encoding="utf-8"))["expected"]
-    return [
-        f"{name}: expected {value!r}, got {server_args.get(name, '<absent>')!r}"
-        for name, value in sorted(expected.items())
-        if server_args.get(name, _ABSENT) != value
-    ]
-
-
-_ABSENT = object()
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=30)
+    except ProcessLookupError:
+        return
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=30)

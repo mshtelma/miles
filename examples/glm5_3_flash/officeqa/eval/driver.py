@@ -6,7 +6,6 @@ import copy
 import json
 import logging
 import math
-import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -22,7 +21,6 @@ from miles.rollout.generate_utils.agent_errors import EnvironmentFailure
 
 logger = logging.getLogger(__name__)
 
-HARNESS = "hf_sglang_v1"
 # The training rollout's sampling, as build_chat_request_kwargs maps it: temperature,
 # top_p and top_k from rollout_*, the 16K per-turn cap as max_tokens, no stop strings, special tokens kept.
 REQUEST_KWARGS = {
@@ -48,26 +46,9 @@ class SetOutcome:
 
 
 def load_rows(path: Path) -> list[dict]:
-    """Eval rows as the recipe reads them (prompt, label, metadata), checked for what the agent needs."""
-    rows, seen = [], set()
+    """Eval rows as prepare_data writes them: prompt, label and metadata (with uid, tools, tool_context)."""
     with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            metadata = row.get("metadata")
-            if not isinstance(row.get("prompt"), (str, list)) or not isinstance(metadata, dict):
-                raise ValueError(f"{path}:{line_number}: a row needs a prompt and a metadata object")
-            uid = metadata.get("uid")
-            if not isinstance(uid, str) or not uid or uid in seen:
-                raise ValueError(f"{path}:{line_number}: metadata.uid must be a unique nonempty string")
-            if not isinstance(metadata.get("tools"), list) or not isinstance(metadata.get("tool_context"), dict):
-                raise ValueError(f"{path}:{line_number}: metadata needs tools and tool_context")
-            seen.add(uid)
-            rows.append(row)
-    if not rows:
-        raise ValueError(f"{path}: the eval set is empty")
-    return rows
+        return [json.loads(line) for line in stream if line.strip()]
 
 
 async def run_sets(
@@ -131,8 +112,6 @@ async def _run_one(name, row, sample, *, outcome, limit, agent_run, proxy, proxy
         except Exception as error:  # an agent bug is lost too, but counted under its own class
             logger.exception("agent failed on %s", trajectory)
             record.update(status="lost", error=f"{type(error).__name__}: {error}")
-        finally:
-            proxy.finish(trajectory)
         record["wall_s"] = time.monotonic() - started
     if record["status"] == "lost":
         outcome.lost += 1
@@ -172,48 +151,11 @@ def lost_fraction(outcomes: dict[str, SetOutcome]) -> float:
     return sum(outcome.lost for outcome in outcomes.values()) / max(1, total)
 
 
-def results_document(*, run_id: str, rollout_id: int | None, identity: dict, outcomes: dict, valid: bool) -> dict:
-    return {
-        "schema": 1,
-        "run_id": run_id,
-        "rollout_id": rollout_id,
-        "init_token": identity,
-        "results": {name: dict(outcome.rewarded) for name, outcome in outcomes.items()},
-        "harness": HARNESS,
-        "valid": valid,
-    }
-
-
-def write_outputs(
-    out_dir: Path,
-    *,
-    results: dict,
-    summary: dict,
-    outcomes: dict,
-    captured: dict,
-    write_once: Callable[[Path, bytes], None] | None = None,
-) -> None:
-    """Write each output once; ``write_once`` (path, bytes) must refuse to overwrite. Local files by default."""
-    write = write_once or _write_new_file
-    write(out_dir / "eval_results.json", _json_bytes(results))
-    write(out_dir / "summary.json", _json_bytes(summary))
-    write(out_dir / "trajectories.jsonl", _jsonl_bytes(r for o in outcomes.values() for r in o.trajectories))
-    if captured:
-        rows = ({"trajectory": name, "turns": turns} for name, turns in captured.items())
-        write(out_dir / "transcripts_sample.jsonl", _jsonl_bytes(rows))
-
-
-def _write_new_file(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-
-
-def _json_bytes(value: dict) -> bytes:
-    return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
-
-
-def _jsonl_bytes(rows) -> bytes:
-    return "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows).encode("utf-8")
+def write_outputs(out_dir: Path, *, model: dict, summary: dict, outcomes: dict[str, SetOutcome]) -> None:
+    """eval_results.json (every reward per question), summary.json and trajectories.jsonl."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = {"model": model, "results": {name: dict(outcome.rewarded) for name, outcome in outcomes.items()}}
+    (out_dir / "eval_results.json").write_text(json.dumps(results, sort_keys=True, indent=2) + "\n")
+    (out_dir / "summary.json").write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n")
+    rows = (record for outcome in outcomes.values() for record in outcome.trajectories)
+    (out_dir / "trajectories.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))

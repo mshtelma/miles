@@ -20,12 +20,6 @@ def _row(uid: str) -> dict:
 
 
 class _Proxy:
-    def __init__(self) -> None:
-        self.finished: list[str] = []
-
-    def finish(self, trajectory: str) -> None:
-        self.finished.append(trajectory)
-
     def turns(self, trajectory: str) -> list[dict]:
         return [{"trajectory": trajectory, "status": 200}]
 
@@ -54,11 +48,11 @@ def _scored(reward: float, category: str) -> dict:
     }
 
 
-async def _run(sets, agent, proxy=None, samples=2):
+async def _run(sets, agent, samples=2):
     return await driver.run_sets(
         sets,
         agent_run=agent,
-        proxy=proxy or _Proxy(),
+        proxy=_Proxy(),
         proxy_url="http://127.0.0.1:1234",
         samples_per_prompt=samples,
         max_concurrent=3,
@@ -69,15 +63,13 @@ async def _run(sets, agent, proxy=None, samples=2):
 
 async def test_each_trajectory_gets_its_own_session_route_and_the_rollout_request() -> None:
     agent, calls = _agent({"q1": [_scored(1.0, "correct"), _scored(0.0, "wrong")]})
-    proxy = _Proxy()
 
-    await _run({"heldout": [_row("q1")]}, agent, proxy)
+    await _run({"heldout": [_row("q1")]}, agent)
 
     sessions = {call["metadata"]["session_id"] for call in calls}
     routes = {call["base_url"] for call in calls}
     assert len(sessions) == 2 and len(routes) == 2  # observation ids are numbered per session
     assert all(route.startswith("http://127.0.0.1:1234/t/heldout-q1-") for route in routes)
-    assert sorted(proxy.finished) == sorted(route.rsplit("/", 1)[1] for route in routes)
     call = calls[0]
     assert call["request_kwargs"] == driver.REQUEST_KWARGS and call["request_kwargs"] is not driver.REQUEST_KWARGS
     assert call["metadata"]["max_seq_len"] == 150_000 and call["metadata"]["attempt_id"] == "a1"
@@ -126,33 +118,16 @@ async def test_an_unreported_trajectory_counts_as_no_report() -> None:
     assert dict(outcome.categories) == {"no_report": 1}
 
 
-def test_rows_must_carry_what_the_agent_needs(tmp_path: Path) -> None:
-    path = tmp_path / "eval.jsonl"
-    path.write_text(json.dumps(_row("q1")) + "\n" + json.dumps(_row("q1")) + "\n")
-    with pytest.raises(ValueError, match="unique"):
-        driver.load_rows(path)
-    broken = _row("q2")
-    del broken["metadata"]["tool_context"]
-    path.write_text(json.dumps(broken) + "\n")
-    with pytest.raises(ValueError, match="tool_context"):
-        driver.load_rows(path)
-
-
-async def test_outputs_keep_option_a_schema_and_publish_once(tmp_path: Path) -> None:
+async def test_outputs_hold_every_reward_the_summary_and_the_trajectories(tmp_path: Path) -> None:
     agent, _ = _agent({"q1": [_scored(1.0, "correct")]})
     outcomes = await _run({"heldout": [_row("q1")]}, agent, samples=1)
-    results = driver.results_document(
-        run_id="r", rollout_id=99, identity={"kind": "export"}, outcomes=outcomes, valid=True
-    )
 
-    driver.write_outputs(tmp_path / "eval", results=results, summary={"valid": True}, outcomes=outcomes, captured={})
+    driver.write_outputs(tmp_path / "eval", model={"kind": "base"}, summary={"valid": True}, outcomes=outcomes)
 
     document = json.loads((tmp_path / "eval/eval_results.json").read_text())
-    assert document["results"] == {"heldout": {"q1": [1.0]}} and document["harness"] == "hf_sglang_v1"
-    assert (document["schema"], document["rollout_id"], document["valid"]) == (1, 99, True)
+    assert document == {"model": {"kind": "base"}, "results": {"heldout": {"q1": [1.0]}}}
+    assert json.loads((tmp_path / "eval/summary.json").read_text()) == {"valid": True}
     assert len((tmp_path / "eval/trajectories.jsonl").read_text().splitlines()) == 1
-    with pytest.raises(FileExistsError):
-        driver.write_outputs(tmp_path / "eval", results=results, summary={}, outcomes=outcomes, captured={})
 
 
 def test_eval_modules_import_without_torch_ray_or_megatron() -> None:
