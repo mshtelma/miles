@@ -14,6 +14,7 @@ from miles.backends.training_utils.checkpoint_io import write_checkpoint_dir
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.backends.training_utils.weight_update.snapshot_publisher import SnapshotPublisher
 from miles.utils.distributed_utils import get_gloo_group
+from miles.utils.function_registry import load_function
 from miles.utils.hf_utils.config import HF_EXPORT_COMPLETE_MARKER
 from miles.utils.megatron_bridge_utils import patch_megatron_model
 
@@ -48,10 +49,12 @@ def save_hf_model(
     def write_weights(checkpoint_dir: Path):
         if args.megatron_to_hf_mode == "raw" and not is_lora_model(model):
             # LoRA needs Bridge to merge the adapter into the base weights
+            layout_factory = getattr(args, "save_hf_layout_path", None)
             publisher.write_model(
                 checkpoint_dir,
                 weights=dict(named_params_and_buffers(args, model, convert_to_global_name=True)),
                 hf_checkpoint=args.hf_checkpoint,
+                layout=load_function(layout_factory)(args) if layout_factory else None,
             )
         else:
             bridge = _get_hf_bridge(args.hf_checkpoint)

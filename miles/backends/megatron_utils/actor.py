@@ -15,6 +15,7 @@ from torch_memory_saver import torch_memory_saver
 from miles.backends.megatron_utils.ft.types import TrainStepOutput
 from miles.backends.megatron_utils.hf_export import save_hf_model
 from miles.backends.megatron_utils.lora.utils import is_lora_enabled, lora_rollout_enabled
+from miles.backends.megatron_utils.megatron_to_hf.processors.quantizer_fp8 import checkpoint_quantization_config
 from miles.backends.megatron_utils.rematerialize_utils import build_main_cast_context
 from miles.backends.megatron_utils.update_weight.hf_weight_iterator import get_hf_weight_iterator
 from miles.backends.training_utils.weight_update.hf_weight_iterator import WeightUpdatePlacement
@@ -310,7 +311,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.model,
                 required_placement=WeightUpdatePlacement(gather_pp=True),
                 model_name=model_name,
-                quantization_config=None if is_lora else quantization_config,
+                # Snapshots are HF checkpoints loaded from disk, so FP8 keeps the checkpoint's scale format.
+                quantization_config=None if is_lora else checkpoint_quantization_config(quantization_config),
             )
             self.snapshot_publisher = SnapshotPublisher(
                 iterator, build_lora_config(args, target_modules=args.lora_adapter_targets) if is_lora else None

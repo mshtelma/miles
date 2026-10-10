@@ -1426,6 +1426,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--save-hf-layout-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a factory `def layout(args) -> HfDiskLayout` that gives a raw --save-hf export the "
+                    "base checkpoint's tensor names, dtypes and shapes as it is written, and adds the base tensors "
+                    "the trainer does not hold (see miles/backends/training_utils/weight_update/snapshot_publisher.py)."
+                ),
+            )
+            parser.add_argument(
                 "--save-trigger-sentinel",
                 type=str,
                 default=None,

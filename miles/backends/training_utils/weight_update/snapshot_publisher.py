@@ -1,8 +1,9 @@
 import json
 import logging
 import shutil
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Protocol
 
 import safetensors.torch
 import torch
@@ -21,6 +22,21 @@ HF_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".gguf")
 def _is_hf_metadata_file(path: Path) -> bool:
     # The base checkpoint's weight index must not overwrite the exported shard mapping.
     return path.is_file() and path.suffix not in HF_WEIGHT_SUFFIXES and not path.name.endswith(".index.json")
+
+
+class HfDiskLayout(Protocol):
+    """Give an export the base checkpoint's layout as it is written (``--save-hf-layout-path``).
+
+    The weight iterator emits the names, dtypes and shapes the rollout engine updates, and only the
+    tensors the trainer holds; a drop-in checkpoint may need the base's names and dtypes, and base tensors
+    the trainer never holds (a vision tower, a multi-token-prediction layer).
+    """
+
+    def place(self, name: str, tensor: torch.Tensor) -> tuple[str, torch.Tensor]:
+        """The base's name for an exported tensor, and the tensor in the base's dtype and shape."""
+
+    def untrained_shards(self, written: set[str]) -> Iterable[dict[str, torch.Tensor]]:
+        """Shards of the base tensors the trainer does not hold and the export therefore lacks."""
 
 
 class SnapshotPublisher:
@@ -58,7 +74,14 @@ class SnapshotPublisher:
             (path / "adapter_config.json").write_text(json.dumps(adapter_config))
             (path / "adapter_model.safetensors").write_bytes(adapter_bytes)
 
-    def write_model(self, path: str | Path, *, weights: Mapping[str, torch.Tensor], hf_checkpoint: str) -> None:
+    def write_model(
+        self,
+        path: str | Path,
+        *,
+        weights: Mapping[str, torch.Tensor],
+        hf_checkpoint: str,
+        layout: HfDiskLayout | None = None,
+    ) -> None:
         """Collectively write HF model shards into the caller's checkpoint directory."""
         path = Path(path)
         is_writer = dist.get_rank() == 0
@@ -74,7 +97,10 @@ class SnapshotPublisher:
             shard_name = f"model-{shard_index:05d}.safetensors"
             shard_tensors = {}
             for name, tensor in hf_named_tensors:
-                shard_tensors[name] = tensor.detach().to("cpu").contiguous()
+                tensor = tensor.detach().to("cpu")
+                if layout is not None:
+                    name, tensor = layout.place(name, tensor)
+                shard_tensors[name] = tensor.contiguous()
                 weight_map[name] = shard_name
                 total_size += shard_tensors[name].numel() * shard_tensors[name].element_size()
             try:
@@ -88,6 +114,13 @@ class SnapshotPublisher:
             raise write_error
         if is_writer:
             assert weight_map, f"HF export to {path} produced no weights"
+            if layout is not None:
+                for shard_tensors in layout.untrained_shards(set(weight_map)):
+                    shard_index += 1
+                    shard_name = f"model-{shard_index:05d}.safetensors"
+                    safetensors.torch.save_file(shard_tensors, path / shard_name)
+                    weight_map.update(dict.fromkeys(shard_tensors, shard_name))
+                    total_size += sum(tensor.numel() * tensor.element_size() for tensor in shard_tensors.values())
             base_checkpoint = Path(hf_checkpoint)
             if base_checkpoint.is_dir():
                 for meta_file in base_checkpoint.iterdir():
