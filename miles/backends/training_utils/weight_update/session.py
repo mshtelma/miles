@@ -85,7 +85,7 @@ def check_weight_sync_results(results: list, *, is_lora: bool) -> None:
     for result in results:
         if isinstance(result, Mapping):
             success = result.get("success")
-            error_msg = result.get("error_message") or result.get("error") or "unknown error"
+            error_msg = result.get("error_message") or result.get("error") or result.get("message") or "unknown error"
         elif hasattr(result, "success"):
             success = result.success
             error_msg = getattr(result, "error_message", "unknown error")
@@ -94,6 +94,5 @@ def check_weight_sync_results(results: list, *, is_lora: bool) -> None:
 
         if success is False:
             raise RuntimeError(
-                f"{sync_type} weight sync failed on rollout engine: {error_msg}. "
-                f"Check SGLang version compatibility."
+                f"{sync_type} weight sync failed on rollout engine: {error_msg}. Check SGLang version compatibility."
             )

@@ -8,7 +8,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from miles.ray.specs.train import compute_critic_args
 from miles.ray.train.group import TrainerController
-from ..utils.ray_utils import compute_ray_pin_head_options
+from ..utils.ray_utils import compute_ray_pin_head_options, get_head_node_ip
 from .rollout.inference_controller import InferenceController
 from .rollout.rollout_executor import RolloutExecutor
 
@@ -40,6 +40,16 @@ def sort_key(x):
             node_ip_parts = [ord(c) for c in node_identifier]
 
     return (node_ip_parts, gpu_id)
+
+
+def order_bundles(bundle_infos: list[tuple[int, str, int]], *, head_ip: str) -> list[tuple[int, str, int]]:
+    """Bundles by node IP and GPU id, with the head node's first.
+
+    The trainer takes the leading GPUs and the inference engines the rest. The head node also
+    runs the driver, the rollout executor and the session servers, so it goes to the trainer
+    rather than to an engine competing with them for its CPUs.
+    """
+    return sorted(bundle_infos, key=lambda info: (info[1] != head_ip, sort_key(info)))
 
 
 class PlacementGroupInfo(NamedTuple):
@@ -74,7 +84,7 @@ def _create_placement_group(num_gpus) -> PlacementGroupInfo:
         ray.kill(actor)
 
     bundle_infos = [(i, gpu_ids[i][0], gpu_ids[i][1]) for i in range(num_bundles)]
-    sorted_bundle_infos = sorted(bundle_infos, key=sort_key)
+    sorted_bundle_infos = order_bundles(bundle_infos, head_ip=get_head_node_ip())
     pg_reordered_bundle_indices = [info[0] for info in sorted_bundle_infos]
     # Map from logical index -> physical GPU ID
     pg_reordered_gpu_ids = [gpu_ids[info[0]][1] for info in sorted_bundle_infos]

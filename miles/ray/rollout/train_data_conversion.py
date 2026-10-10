@@ -134,9 +134,17 @@ def convert_samples_to_train_data(
         train_data["rollout_sampling_mask_ids"] = sampling_mask_ids
         train_data["rollout_sampling_mask_offsets"] = sampling_mask_offsets
 
+    if getattr(args, "use_rollout_routing_replay", False):
+        _require_replay_payload(
+            samples, "rollout_routed_experts", flag="--use-rollout-routing-replay", meta_key="routed_experts"
+        )
     if samples[0].rollout_routed_experts is not None:
         train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
 
+    if getattr(args, "use_rollout_indexer_replay", False):
+        _require_replay_payload(
+            samples, "rollout_indexer_topk", flag="--use-rollout-indexer-replay", meta_key="indexer_topk"
+        )
     if samples[0].rollout_indexer_topk is not None:
         train_data["rollout_indexer_topk"] = [sample.rollout_indexer_topk for sample in samples]
 
@@ -164,6 +172,17 @@ def convert_samples_to_train_data(
         train_data["dynamic_global_batch_size"] = x
 
     return train_data
+
+
+def _require_replay_payload(samples: list[Sample], field: str, *, flag: str, meta_key: str) -> None:
+    """Replay needs every sample's payload: without any, the batch trains on the trainer's own routing;
+    without some, the trainer fails later on the gap."""
+    for position, sample in enumerate(samples):
+        if getattr(sample, field) is None:
+            raise ValueError(
+                f"{flag} is set but a rollout sample carries no {field}: the engine response meta_info lacked "
+                f"{meta_key!r} (position={position}, sample_index={sample.index}, status={sample.status})."
+            )
 
 
 def _compute_rollout_mask_sums(rollout_ids: list[int], loss_masks: list[list[int]]) -> list[int]:

@@ -58,6 +58,11 @@ def _apply_bridge_runtime_config(provider, args: argparse.Namespace) -> None:
     provider.gradient_accumulation_fusion = args.gradient_accumulation_fusion
     provider.fp32_residual_connection = args.fp32_residual_connection
     provider.deterministic_mode = args.deterministic_mode
+    # Bridge bypasses core_transformer_config_from_args, including --no-rope-fusion. Megatron parses
+    # apply_rope_fusion=True unless that flag is given, so forward only the explicit disable: providers
+    # that turn fusion off on purpose (MLA/DSA, Gemma, TransformerConfig's own default) must keep it off.
+    if getattr(args, "apply_rope_fusion", True) is False:
+        provider.apply_rope_fusion = False
 
     # activation recompute (silently dropped before -> no checkpointing -> OOM at long context)
     provider.recompute_granularity = args.recompute_granularity

@@ -94,6 +94,36 @@ class WeightUpdater:
     @torch.no_grad()
     def update_weights(self) -> None:
         """Run one weight sync: session frame + base-bucket stream + adapter pushes for LoRA."""
+        try:
+            self._update_weights_impl()
+        except BaseException:
+            # A sender can fail during an HTTP/NCCL bucket send while its peers
+            # are already entering the next TP/EP gather. Abort those groups so
+            # the peers fail promptly instead of waiting for the NCCL timeout.
+            self._abort_weight_update_groups()
+            raise
+
+    def _abort_weight_update_groups(self) -> None:
+        groups = [dist.group.WORLD]
+        try:
+            groups.append(get_gloo_group())
+        except Exception:
+            logger.exception("could not locate the weight-update Gloo group while aborting")
+        for name in ("tp", "etp", "ep", "pp", "cp", "intra_dp_cp", "intra_dp", "indep_dp"):
+            info = getattr(self.parallel_state, name, None)
+            if info is not None:
+                groups.append(info.group)
+        seen = set()
+        for group in groups:
+            if group is None or id(group) in seen or not hasattr(group, "abort"):
+                continue
+            seen.add(id(group))
+            try:
+                group.abort()
+            except Exception:
+                logger.exception("could not abort a weight-update process group")
+
+    def _update_weights_impl(self) -> None:
         protocol = self.protocol
         if not protocol.begin_sync(self.weight_version + 1, self._iter_base_buckets):
             return

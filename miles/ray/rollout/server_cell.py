@@ -29,7 +29,7 @@ from miles.utils.ft_utils.health_checker import (
     SimpleHealthCheckerConfig,
 )
 from miles.utils.pydantic_utils import FrozenStrictBaseModel
-from miles.utils.workers.launch_gate import GATE_PORT_NAME, activate_launch_gate
+from miles.utils.workers.launch_gate import GATE_PORT_NAME, activate_launch_gate, sglang_serves_launch_gate
 from miles.utils.workers.worker_provider.base import BaseWorkerProvider
 from miles.utils.workers.worker_provider.ray import RayWorkerProvider
 
@@ -155,7 +155,11 @@ class ServerCell:
             )
 
         addr_info = await self._compute_addr_info()
-        await activate_launch_gate(gate_url=addr_info.gate_url)
+        if sglang_serves_launch_gate():
+            await activate_launch_gate(gate_url=addr_info.gate_url)
+        else:
+            # Waiting would only time out: the engine is already starting without a gate.
+            logger.warning(f"Cell {self.meta.cell_id}: the installed SGLang has no launch gate; not waiting for one")
         self._change_state(
             "init", StateUninitialized, StateInitializing(addr_info=addr_info, start_time=time.monotonic())
         )

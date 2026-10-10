@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import torch
 
 from miles.backends.training_utils.weight_update.updater import WeightUpdater
 from miles.utils import async_utils
@@ -260,3 +261,14 @@ class TestWeightUpdateSessionFrame:
         _run(updater, rank=1)
 
         assert calls == []
+
+    def test_sender_bucket_failure_aborts_peer_collective_groups(self):
+        updater = _make_updater(_make_engines([]))
+        updater._hf_weight_iterator.iter_hf_weights.return_value = iter([[("w", torch.zeros(1))]])
+        updater.protocol.send_bucket.side_effect = RuntimeError("receiver rejected bucket")
+
+        with pytest.raises(RuntimeError, match="receiver rejected bucket"):
+            _run(updater)
+
+        updater.parallel_state.tp.group.abort.assert_called_once()
+        updater.parallel_state.ep.group.abort.assert_called_once()

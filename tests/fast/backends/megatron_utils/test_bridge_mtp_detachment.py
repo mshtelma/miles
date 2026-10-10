@@ -2,15 +2,29 @@
 
 import argparse
 import ast
+import sys
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from tests.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=1, suite="stage-a-cpu", labels=[])
+
+
+@pytest.fixture(autouse=True)
+def stub_dsa_backend_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The Bridge helper imports the DSA mapper; its Megatron import requires
+    # libcuda in the AIR image, while these tests only check argument copying.
+    module = ModuleType("miles.utils.megatron_bridge_utils")
+
+    def ignore_backend_args(_provider, _args) -> None:
+        return None
+
+    module.apply_dsa_backend_args = ignore_backend_args
+    monkeypatch.setitem(sys.modules, module.__name__, module)
 
 
 @pytest.fixture(scope="module")
@@ -82,3 +96,32 @@ def test_bridge_mtp_detachment(
 
     assert provider.mtp_detach_heads is expected_detach
     assert provider.mtp_num_layers == 1
+
+
+@pytest.mark.parametrize("provider_default", [False, True])
+def test_bridge_forwards_an_explicit_no_rope_fusion(
+    apply_bridge_runtime_config: Callable, runtime_args: argparse.Namespace, provider_default: bool
+) -> None:
+    runtime_args.apply_rope_fusion = False  # --no-rope-fusion
+    provider = SimpleNamespace(apply_rope_fusion=provider_default)
+    apply_bridge_runtime_config(provider, runtime_args)
+    assert provider.apply_rope_fusion is False
+
+
+@pytest.mark.parametrize("provider_default", [False, True])
+def test_bridge_keeps_the_provider_choice_at_megatron_default(
+    apply_bridge_runtime_config: Callable, runtime_args: argparse.Namespace, provider_default: bool
+) -> None:
+    """Megatron's parsed default is True; DeepSeek/Kimi/DSA providers set False and must not be overridden."""
+    runtime_args.apply_rope_fusion = True
+    provider = SimpleNamespace(apply_rope_fusion=provider_default)
+    apply_bridge_runtime_config(provider, runtime_args)
+    assert provider.apply_rope_fusion is provider_default
+
+
+def test_bridge_preserves_rope_fusion_when_argument_is_absent(
+    apply_bridge_runtime_config: Callable, runtime_args: argparse.Namespace
+) -> None:
+    provider = SimpleNamespace(apply_rope_fusion=True)
+    apply_bridge_runtime_config(provider, runtime_args)
+    assert provider.apply_rope_fusion is True

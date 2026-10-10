@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 import ray
 import torch
@@ -148,6 +149,28 @@ class TestConvertSamplesToTrainData:
             ValueError,
             match=r"must be present for every training sample.*sample_index=9",
         ):
+            convert_samples_to_train_data(
+                args,
+                [captured, make_sample(index=9)],
+                metadata={},
+                custom_convert_samples_to_train_data_func=None,
+                custom_reward_post_process_func=None,
+            )
+
+    @pytest.mark.parametrize(
+        "flag, field",
+        [
+            ("use_rollout_routing_replay", "rollout_routed_experts"),
+            ("use_rollout_indexer_replay", "rollout_indexer_topk"),
+        ],
+    )
+    def test_replay_requires_every_sample_to_carry_its_payload(self, flag, field):
+        args = make_args(rewards_normalization=False, **{flag: True})
+        captured = make_sample(index=8)
+        setattr(captured, field, np.zeros((3, 1, 1), dtype=np.int32))
+
+        # The first sample carries the payload, so a check of it alone would pass the gap at index 9.
+        with pytest.raises(ValueError, match=rf"carries no {field}.*sample_index=9"):
             convert_samples_to_train_data(
                 args,
                 [captured, make_sample(index=9)],

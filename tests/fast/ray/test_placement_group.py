@@ -301,6 +301,19 @@ class TestCreatePlacementGroups:
         assert pgs["rollout"].pg_reordered_gpu_ids == [102, 103, 104]
 
 
+def test_the_head_nodes_gpus_come_first_so_the_trainer_gets_them():
+    """The head runs the driver, rollout executor and session servers; an engine there starves them."""
+    from miles.ray.placement_group import order_bundles
+
+    bundles = [(0, "10.0.0.9", 1), (1, "10.0.0.9", 0), (2, "10.0.0.10", 0), (3, "10.0.0.2", 1), (4, "10.0.0.2", 0)]
+
+    head_first = order_bundles(bundles, head_ip="10.0.0.9")
+    no_match = order_bundles(bundles, head_ip="10.0.0.99")
+
+    assert [index for index, *_ in head_first] == [1, 0, 4, 3, 2]
+    assert [index for index, *_ in no_match] == [4, 3, 1, 0, 2]  # numeric IP order, as before
+
+
 class TestUpdateWeights:
     def _fakes(self, *, weight_version: int | None):
         actor_model = MagicMock()

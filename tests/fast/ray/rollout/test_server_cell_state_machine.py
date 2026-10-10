@@ -117,6 +117,7 @@ def cell_env(monkeypatch):
         return health["ready"]
 
     monkeypatch.setattr(server_cell_module, "activate_launch_gate", _activate)
+    monkeypatch.setattr(server_cell_module, "sglang_serves_launch_gate", lambda: True)
     monkeypatch.setattr(server_cell_module, "probe_server_healthy", _probe)
     monkeypatch.setattr(server_cell_module, "SGLangApiClient", _RecordingApiClient)
     monkeypatch.setattr(ServerCell, "_compute_addr_info", _compute_addr_info)
@@ -161,6 +162,16 @@ class TestInit:
         assert cell_env["activated"] == ["http://10.0.0.1:13000"]
         assert isinstance(cell._state, StateInitializing)
         assert cell.addr_info == _ADDR_INFO
+
+    async def test_init_skips_the_gate_when_sglang_cannot_serve_it(self, cell_env, monkeypatch):
+        """An SGLang build without gated launch starts immediately, so waiting would only time out."""
+        monkeypatch.setattr(server_cell_module, "sglang_serves_launch_gate", lambda: False)
+        cell = _make_cell()
+
+        await cell.init()
+
+        assert cell_env["activated"] == []
+        assert isinstance(cell._state, StateInitializing)
 
     async def test_init_does_not_wait_for_the_engine_to_become_ready(self, cell_env):
         """Blocking here would stall the caller for the minutes an engine takes to load."""
@@ -229,6 +240,7 @@ class TestInit:
             cell_env["activated"].append(gate_url)
 
         monkeypatch.setattr(server_cell_module, "activate_launch_gate", _flaky_activate)
+        monkeypatch.setattr(server_cell_module, "sglang_serves_launch_gate", lambda: True)
         cell = _make_cell()
 
         with pytest.raises(RuntimeError, match="gate refused"):

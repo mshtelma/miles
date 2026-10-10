@@ -1,12 +1,14 @@
 import asyncio
 import threading
 from argparse import Namespace
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
 from miles.backends.training_utils.weight_update.protocols.broadcast import (
+    UpdateWeightFromDistributed,
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     update_weights_from_distributed,
@@ -67,6 +69,11 @@ class _RecordingHandle:
 
     def wait(self) -> None:
         self.waited = True
+
+
+class _RejectingWeightEngine:
+    async def update_weights_from_distributed(self, **_kwargs) -> dict:
+        return {"success": False, "message": "bad scale"}
 
 
 class TestConnectRolloutEnginesFromDistributed:
@@ -182,3 +189,18 @@ class TestUpdateWeightsFromDistributed:
         assert [handle.waited for handle in handles] == [True, True]
         assert [tensor.is_contiguous() for tensor in broadcast_tensors] == [True, True]
         assert torch.equal(broadcast_tensors[1], _BASE_NAMED_TENSORS[1][1])
+
+    def test_receiver_failure_keeps_the_bucket_for_diagnosis(self) -> None:
+        protocol = UpdateWeightFromDistributed.__new__(UpdateWeightFromDistributed)
+        protocol._engine_lock = nullcontext()
+        protocol.group_name = "miles-pp_0"
+        protocol._model_update_groups = MagicMock()
+        protocol.rollout_engines = [_RejectingWeightEngine()]
+        protocol._selector = "target"
+        bucket = list(_BASE_NAMED_TENSORS)
+        with patch(f"{_BROADCAST_MODULE}.dist") as dist_mock:
+            dist_mock.broadcast.return_value = _RecordingHandle()
+            with pytest.raises(RuntimeError, match="bad scale"):
+                protocol.send_bucket(bucket)
+        assert [name for name, _ in bucket] == [name for name, _ in _BASE_NAMED_TENSORS]
+        assert all(tensor is source for (_, tensor), (_, source) in zip(bucket, _BASE_NAMED_TENSORS, strict=True))

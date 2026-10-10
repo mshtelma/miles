@@ -68,6 +68,7 @@ def _stub_network(monkeypatch, *, ready: bool = True) -> None:
         return _ADDR_INFO
 
     monkeypatch.setattr(server_cell_module, "activate_launch_gate", _activate)
+    monkeypatch.setattr(server_cell_module, "sglang_serves_launch_gate", lambda: True)
     monkeypatch.setattr(server_cell_module, "probe_server_healthy", _probe)
     monkeypatch.setattr(ServerCell, "_compute_addr_info", _compute_addr_info)
 
