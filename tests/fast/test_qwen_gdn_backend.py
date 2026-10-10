@@ -1,27 +1,40 @@
-"""fla vs flashqla numerical equivalence for the Qwen GDN backends.
+"""Delta-rule kernel selection, and fla vs flashqla numerical equivalence for the Qwen GDN backends.
 
-Needs a Hopper (SM90+) GPU with both `fla` and `flash_qla`; skips otherwise.
+The equivalence tests need a Hopper (SM90+) GPU with both `fla` and `flash_qla`; they skip otherwise.
 """
 
-import importlib.util
-from pathlib import Path
+import os
+import sys
+import types
 
 import pytest
 
-
-def load_backend_module():
-    module_path = Path(__file__).resolve().parents[2] / "miles_plugins" / "models" / "qwen_gdn_backend.py"
-    spec = importlib.util.spec_from_file_location("test_qwen_gdn_backend_module", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+from miles.kernels.attention.delta_rule import backend
 
 
 def test_unknown_backend_raises_value_error():
-    module = load_backend_module()
-    with pytest.raises(ValueError, match="Unsupported Qwen GDN backend"):
-        module.get_chunk_gated_delta_rule("nope")
+    with pytest.raises(ValueError, match="Unsupported GDN backend"):
+        backend.get_chunk_gated_delta_rule("nope")
+
+
+@pytest.mark.parametrize(
+    "capability,user_value,expected", [((10, 0), None, "0"), ((9, 0), None, None), ((10, 0), "1", "1")]
+)
+def test_kda_uses_the_triton_backward_on_blackwell_unless_set(monkeypatch, capability, user_value, expected):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setitem(sys.modules, "fla.ops.kda", types.SimpleNamespace(chunk_kda="chunk_kda"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: capability)
+    monkeypatch.delenv("FLA_TILELANG", raising=False)
+    if user_value is not None:
+        monkeypatch.setenv("FLA_TILELANG", user_value)
+    assert backend.get_chunk_kda.__wrapped__() == "chunk_kda"
+    assert os.environ.get("FLA_TILELANG") == expected
+
+
+def test_short_conv_backend_respects_fla_conv_backend(monkeypatch):
+    monkeypatch.setenv("FLA_CONV_BACKEND", "cuda")
+    assert backend.get_short_conv_backend.__wrapped__() == "cuda"
 
 
 NUM_HEADS = 4
@@ -85,10 +98,9 @@ def _run(kernel, query, key, value, g, beta, cu_seqlens):
 def test_fla_flashqla_equivalence(dtype_name, atol, rtol):
     torch = _require_backends()
     dtype = getattr(torch, dtype_name)
-    module = load_backend_module()
 
-    fla_kernel = module.get_chunk_gated_delta_rule("fla")
-    flashqla_kernel = module.get_chunk_gated_delta_rule("flashqla")
+    fla_kernel = backend.get_chunk_gated_delta_rule("fla")
+    flashqla_kernel = backend.get_chunk_gated_delta_rule("flashqla")
 
     query, key, value, g, beta, cu = _make_inputs(torch, dtype, device="cuda")
 
