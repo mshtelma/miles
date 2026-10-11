@@ -88,11 +88,13 @@ def cluster(tmp_path, monkeypatch):
     return nodes
 
 
-def _older_save(remote: Path) -> Path:
-    """A save published before: its DCP state and its HF export."""
+def _older_save(remote: Path, *, hf: bool = True) -> Path:
+    """A save published before: its DCP state and, unless ``hf`` is false, its HF export."""
     iteration = remote / "iter_0000001"
-    (iteration / "hf").mkdir(parents=True)
-    (iteration / "hf/model-00001.safetensors").write_bytes(b"hf")
+    iteration.mkdir(parents=True)
+    if hf:
+        (iteration / "hf").mkdir()
+        (iteration / "hf/model-00001.safetensors").write_bytes(b"hf")
     (iteration / "__0_0.distcp").write_bytes(b"shard")
     (iteration / ".metadata").write_bytes(b"metadata")
     return iteration
@@ -124,6 +126,16 @@ def test_a_published_save_leaves_the_older_saves_only_their_hf_export(tmp_path, 
         "__1_0.distcp",
         "hf/model-00001.safetensors",
     ]
+
+
+def test_an_older_save_without_an_hf_export_is_removed(tmp_path, cluster, monkeypatch):
+    older = _older_save(tmp_path / "volume", hf=False)
+    copies = _Copies(cluster)
+    monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
+
+    asyncio.run(publisher.VolumePublisher(SimpleNamespace(save=str(tmp_path / "head"))).after_save(3))
+
+    assert not older.exists()
 
 
 class _FakeMlflowClient:

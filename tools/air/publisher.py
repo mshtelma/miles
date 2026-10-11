@@ -49,6 +49,8 @@ def prune_older_saves(remote: Path, rollout_id: int) -> None:
                     shutil.rmtree(path)
                 elif path.is_file():
                     path.unlink()
+            if not any(save.iterdir()):
+                save.rmdir()  # a save without an HF export leaves nothing to keep
 
 
 def record_mlflow_run(remote: Path, rollout_id: int, run_id: str) -> None:
