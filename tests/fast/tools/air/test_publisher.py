@@ -85,6 +85,16 @@ def cluster(tmp_path, monkeypatch):
     return nodes
 
 
+def _older_save(remote: Path) -> Path:
+    """A save published before: its DCP state and its HF export."""
+    iteration = remote / "iter_0000001"
+    (iteration / "hf").mkdir(parents=True)
+    (iteration / "hf/model-00001.safetensors").write_bytes(b"hf")
+    (iteration / "__0_0.distcp").write_bytes(b"shard")
+    (iteration / ".metadata").write_bytes(b"metadata")
+    return iteration
+
+
 def test_the_tracker_is_written_once_every_live_node_copied(tmp_path, cluster, monkeypatch):
     copies = _Copies(cluster)
     monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
@@ -97,7 +107,24 @@ def test_the_tracker_is_written_once_every_live_node_copied(tmp_path, cluster, m
     assert {"iter_0000003/__0_0.distcp", "iter_0000003/__1_0.distcp"} <= set(_files(remote))
 
 
-def test_a_failed_node_copy_leaves_the_tracker_untouched(tmp_path, cluster, monkeypatch):
+def test_a_published_save_leaves_the_older_saves_only_their_hf_export(tmp_path, cluster, monkeypatch):
+    older = _older_save(tmp_path / "volume")
+    copies = _Copies(cluster)
+    monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
+
+    asyncio.run(publisher.VolumePublisher(SimpleNamespace(save=str(tmp_path / "head"))).after_save(3))
+
+    assert _files(older) == ["hf/model-00001.safetensors"]
+    assert _files(tmp_path / "volume/iter_0000003") == [
+        ".metadata",
+        "__0_0.distcp",
+        "__1_0.distcp",
+        "hf/model-00001.safetensors",
+    ]
+
+
+def test_a_failed_node_copy_leaves_the_tracker_and_the_older_saves_untouched(tmp_path, cluster, monkeypatch):
+    older = _older_save(tmp_path / "volume")
     copies = _Copies(cluster, fail="trainer")
     monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
 
@@ -105,3 +132,4 @@ def test_a_failed_node_copy_leaves_the_tracker_untouched(tmp_path, cluster, monk
         asyncio.run(publisher.VolumePublisher(SimpleNamespace(save=str(tmp_path / "head"))).after_save(3))
 
     assert not (tmp_path / "volume/latest_checkpointed_iteration.txt").exists()
+    assert _files(older) == [".metadata", "__0_0.distcp", "hf/model-00001.safetensors"]

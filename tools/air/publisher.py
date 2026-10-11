@@ -4,7 +4,8 @@
 ``VolumePublisher`` and exports ``MILES_PERSIST_DIR=DIR``. Megatron saves to ``--save`` on each node's
 local disk. Once the trainer and the rollout state are saved, one task per node copies that node's part of
 the save into DIR and deletes it locally. Megatron's tracker, ``latest_checkpointed_iteration.txt``, is
-written last, so ``--load DIR`` resumes only from a save that was copied whole.
+written last, so ``--load DIR`` resumes only from a save that was copied whole. The older saves then lose
+their training state, about 4.4 TB each, and keep only their HF export.
 """
 
 import asyncio
@@ -33,6 +34,18 @@ def copy_node_save(local: Path, remote: Path, rollout_id: int) -> None:
             path.unlink()
 
 
+def prune_older_saves(remote: Path, rollout_id: int) -> None:
+    """Delete everything but the HF export from the saves before ``rollout_id``: only the newest save
+    is ever resumed from."""
+    for save in remote.glob("iter_*"):
+        if int(save.name.removeprefix("iter_")) < rollout_id:
+            for path in save.iterdir():
+                if path.is_dir() and path.name != "hf":
+                    shutil.rmtree(path)
+                elif path.is_file():
+                    path.unlink()
+
+
 class VolumePublisher:
     def __init__(self, args):
         self.local, self.remote = Path(args.save), Path(os.environ["MILES_PERSIST_DIR"])
@@ -50,3 +63,4 @@ class VolumePublisher:
         )
         await asyncio.to_thread((self.remote / TRACKER).write_text, str(rollout_id))
         print(f"checkpoint {rollout_id} copied to {self.remote}", flush=True)
+        await asyncio.to_thread(prune_older_saves, self.remote, rollout_id)

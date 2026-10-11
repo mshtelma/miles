@@ -65,7 +65,8 @@ every 10. Each save includes an HF checkpoint for `eval.yaml`, and Miles logs in
 run.
 
 With `--save-hf`, each save holds the trainer 10 to 12 minutes while it writes the 328 GB HF
-checkpoint. Without it, convert a save later with `tools/convert_torch_dist_to_hf.py`.
+checkpoint. Without it, only the newest save can be converted later, with
+`tools/convert_torch_dist_to_hf.py`.
 
 For a short check, set
 `env_variables.TRAIN_ARGS="--save-hf --num-rollout 2 --save-interval 2 --mlflow-experiment glm53-flash-officeqa"`.
@@ -78,8 +79,9 @@ What the job does:
 * **Saves.** Megatron saves to each node's local disk. Once a save's trainer and rollout state are
   written, `tools/air/publisher.py` copies every node's part of it to `runs/<RUN_ID>/checkpoints/` with
   plain file copies and deletes it locally; training goes on meanwhile. Megatron's tracker,
-  `latest_checkpointed_iteration.txt`, is written last. The next save waits for the copy, and a failed
-  copy fails the run.
+  `latest_checkpointed_iteration.txt`, is written last. The older saves then lose their training
+  state and keep only their HF checkpoint. The next save waits for the copy, and a failed copy fails
+  the run.
 * **Resume.** Submit again with the same `RUN_ID`. Miles loads the save the tracker names, straight
   from the Volume, or starts from the converted reference when there is none. A resume must keep
   `--num-rollout`, because Megatron rejects a different LR schedule length.
@@ -108,4 +110,5 @@ solved, lost trajectories), `trajectories.jsonl` and the SGLang server's log.
 * `timeout_minutes` includes the time a job waits for GPUs.
 * AIR stops a job when any of its nodes has had all GPUs idle for 60 minutes. Every step here stays
   below that, but a much larger dataset or a very slow first rollout can exceed it.
-* Saves stay on the Volume, about 4.7 TB each with the HF checkpoint; delete the ones you no longer need.
+* A run keeps one 4.4 TB training state, its newest save's, plus a 328 GB HF checkpoint per save.
+  Delete the runs you no longer need.
