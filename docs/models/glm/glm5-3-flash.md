@@ -44,13 +44,12 @@ Download and convert the checkpoint (`--ref-load` resolves to `<--ckpt-dir>/glm5
 python scripts/run_glm5_3_flash.py prepare                      # 1 node
 ```
 
-Build the OfficeQA prompt files. The inputs are `officeqa_full.csv` from the gated
-`databricks/officeqa` dataset, plus the Treasury Bulletin corpus (`treasury_bulletins_clean.zip` and
-its BM25 passages `chunks.jsonl`):
+Build the OfficeQA prompt files and corpus. The script downloads the gated `databricks/officeqa` dataset
+at a pinned revision, so accept its terms on Hugging Face and export a token first. It keeps the
+bulletins as the dataset's own text rendering, and cuts them into the passages the agent's search ranks:
 
 ```bash
-python -m examples.glm5_3_flash.officeqa.prepare_data --questions officeqa_full.csv \
-  --corpus-dir corpus/ --out-dir /root/datasets/officeqa
+HF_TOKEN=<token> python -m examples.glm5_3_flash.officeqa.prepare_data --out-dir /root/datasets/officeqa
 ```
 
 The script trains on all 113 easy questions and 90 of the 133 hard ones, and holds out the other 43
@@ -81,14 +80,14 @@ The trainer waits for it: in the 8-node recipe, a save with the export takes
 10 to 12 minutes. Without `--save-hf`, convert a save later with `tools/convert_torch_dist_to_hf.py`.
 
 On Databricks AI Runtime, three jobs run the whole flow: prepare, train and evaluate. See
-[OfficeQA on Databricks AI Runtime](/examples/glm5-3-flash/officeqa/air).
+[GLM-5.3-Flash on OfficeQA](/examples/glm5-3-flash).
 
 ## 5. Evaluation
 
 `examples/glm5_3_flash/officeqa/air/eval.yaml` scores the base model or a `--save-hf` checkpoint on
 the held-out questions: a standalone SGLang server set up like the rollout engines, running the
 training agent, tools and reward. See
-[OfficeQA on Databricks AI Runtime](/examples/glm5-3-flash/officeqa/air).
+[GLM-5.3-Flash on OfficeQA](/examples/glm5-3-flash#3-evaluate).
 
 ## 6. What a Healthy Run Looks Like
 
