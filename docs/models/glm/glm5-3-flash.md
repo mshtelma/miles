@@ -1,12 +1,11 @@
 ---
 title: GLM-5.3-Flash
-description: Agentic RL recipe for GLM-5.3-Flash, a KDA + DSA hybrid MoE, on OfficeQA at 150K tokens.
+description: GLM-5.3-Flash, a KDA + DSA hybrid MoE, with fully async DAPO on math, and as an agent on OfficeQA at 150K tokens.
 ---
 
-This recipe trains GLM-5.3-Flash as a tool-using agent on [OfficeQA](https://huggingface.co/datasets/databricks/officeqa).
-OfficeQA asks questions about U.S. Treasury Bulletins. The agent searches and reads the bulletins,
-computes in a Python sandbox, and submits an answer with the path of evidence behind it. Training is
-fully async DAPO with a 150K-token context.
+Two recipes train GLM-5.3-Flash on the same eight-node layout. `scripts/run_glm5_3_flash.py` is its standard
+Miles recipe: fully async DAPO on DAPO-Math-17k, and any other task by flags. The
+[OfficeQA example](/examples/air-officeqa) trains it as a tool-using research agent at 150K tokens per episode.
 
 ## 1. Model Introduction
 
@@ -24,13 +23,12 @@ GLM5.2 flagships, not a smaller cut of them.
 
 ## 2. Layout
 
-`examples/air_officeqa/run_officeqa.py` trains on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12
-layers) EP8, and the others serve the policy as 8-GPU SGLang engines, fully async. More nodes add
-engines.
+Both recipes train on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12 layers) EP8, and the others
+serve the policy as 8-GPU SGLang engines, fully async. More nodes add engines.
 
 ## 3. Environment Setup
 
-The recipe runs on the Databricks AI Runtime image built from `docker/air/Dockerfile`
+Both recipes run on the Databricks AI Runtime image built from `docker/air/Dockerfile`
 (`python docker/build.py --variant air-glm53`). It pins:
 
 - miles;
@@ -38,58 +36,56 @@ The recipe runs on the Databricks AI Runtime image built from `docker/air/Docker
 - Megatron-LM [`#89`](https://github.com/radixark/Megatron-LM/pull/89) at `e8f57451`;
 - bubblewrap and bm25s, for the agent's tools.
 
-Download and convert the checkpoint (`--ref-load` resolves to `<--ckpt-dir>/glm5.3-flash_torch_dist`):
+Download the checkpoint and the math datasets, and convert the checkpoint (`--ref-load` resolves to
+`<--ckpt-dir>/glm5.3-flash_torch_dist`):
 
 ```bash
-python examples/air_officeqa/run_officeqa.py prepare                      # 1 node
+python scripts/run_glm5_3_flash.py prepare                      # 1 node
 ```
-
-Build the OfficeQA prompt files and corpus. The script downloads the gated `databricks/officeqa` dataset
-at a pinned revision, so accept its terms on Hugging Face and export a token first. It keeps the
-bulletins as the dataset's own text rendering, and cuts them into the passages the agent's search ranks:
-
-```bash
-HF_TOKEN=<token> python -m examples.air_officeqa.prepare_data --out-dir /root/datasets/officeqa
-```
-
-The script trains on all 113 easy questions and 90 of the 133 hard ones, and holds out the other 43
-hard questions in `eval_heldout.jsonl`.
 
 ## 4. Launch
 
 On an 8-node Ray cluster (`MILES_SCRIPT_EXTERNAL_RAY=1`), from the head node:
 
 ```bash
-python examples/air_officeqa/run_officeqa.py train --save-hf
+python scripts/run_glm5_3_flash.py train --save-hf
 ```
 
-The defaults are the recipe:
+The defaults are the standard math recipe:
 
-- 100 steps of 8 prompts x 8 samples, at 150K tokens per episode and 16K tokens per model turn;
-- up to 128 agent turns;
+- 3000 steps of 32 prompts x 8 samples, at 32K tokens per sample and 8K per response, with the deepscaler reward;
+- AIME-2024 every 20 steps, 16 samples each;
+- weight staleness up to 16 and 512 samples in flight;
+- routing replay, with in-flight requests paused in place for each weight update;
+- a save every 20 steps.
+
+Another task is a matter of flags: `--prompt-data` for the prompts, `--no-enable-eval`, and `--extra-args` for
+the rest, such as `--custom-rm-path`. `--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`,
+in the base model's layout); the trainer waits for it, 10 to 12 minutes a save. Without `--save-hf`, convert a
+save later with `tools/convert_torch_dist_to_hf.py`.
+
+On Databricks AI Runtime, `tools/air/prepare.yaml` and `tools/air/train.yaml` run this launcher (see
+[Miles on Databricks AI Runtime](https://github.com/radixark/miles/blob/main/tools/air/README.md)).
+
+## 5. Agentic RL on OfficeQA
+
+[OfficeQA](https://huggingface.co/datasets/databricks/officeqa) asks questions about U.S. Treasury Bulletins.
+The agent searches and reads the bulletins, computes in a Python sandbox, and submits an answer with the path
+of evidence behind it. `examples/air_officeqa/run_officeqa.py` trains it on the layout above, fully async at
+150K tokens per episode:
+
+- 100 steps of 8 prompts x 8 samples, at 16K tokens per model turn and up to 128 agent turns;
 - weight staleness up to 16 and 480 episodes in flight;
-- routing replay, and Dr. GRPO (no reward-std normalization);
+- routing replay through the session server, and Dr. GRPO (no reward-std normalization);
 - a save every 10 steps.
 
-The reward credits a correct answer only if an LLM judge confirms the cited path supports it. The
-judge is a Databricks serving endpoint, listed in `examples/air_officeqa/judges.json`, so
-the workers need `DATABRICKS_HOST` and `DATABRICKS_TOKEN`.
+The reward credits a correct answer only if an LLM judge confirms the cited path supports it. The judge is a
+Databricks serving endpoint, listed in `examples/air_officeqa/judges.json`, so the workers need
+`DATABRICKS_HOST` and `DATABRICKS_TOKEN`. The example also has the data preparation, a standalone eval of the
+base model or a save on 43 held-out questions, and the AIR jobs for all three: see
+[OfficeQA on Databricks AI Runtime](/examples/air-officeqa).
 
-`--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`, in the base model's layout).
-The trainer waits for it: in the 8-node recipe, a save with the export takes
-10 to 12 minutes. Without `--save-hf`, convert a save later with `tools/convert_torch_dist_to_hf.py`.
-
-On Databricks AI Runtime, three jobs run the whole flow: prepare, train and evaluate. See
-[GLM-5.3-Flash on OfficeQA](/examples/air-officeqa).
-
-## 5. Evaluation
-
-`examples/air_officeqa/air/eval.yaml` scores the base model or a `--save-hf` checkpoint on
-the held-out questions: a standalone SGLang server set up like the rollout engines, running the
-training agent, tools and reward. See
-[GLM-5.3-Flash on OfficeQA](/examples/air-officeqa#3-evaluate).
-
-## 6. What a Healthy Run Looks Like
+## 6. What a Healthy OfficeQA Run Looks Like
 
 A 50-step OfficeQA run of this recipe on 8x B300 showed these metrics:
 

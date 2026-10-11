@@ -1,9 +1,9 @@
 # Miles on Databricks AI Runtime
 
-Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory holds the two helpers Miles
-uses there and a training job for any Miles launcher, and this page describes how Miles maps onto AIR. The
-[GLM-5.3-Flash example](../../examples/air_officeqa/README.md) is a complete flow built from these pieces:
-prepare, train and evaluate.
+Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory is how Miles runs there with
+any launcher and any task: two jobs, which prepare a launcher's inputs and train with it, and the helpers they use.
+This page describes how Miles maps onto AIR. [OfficeQA on AIR](../../examples/air_officeqa/README.md) builds a
+complete agentic flow from these pieces: prepare, train and evaluate, with GLM-5.3-Flash or Qwen3.5-35B-A3B.
 
 ## How an AIR job runs
 
@@ -66,31 +66,48 @@ does three things:
 - makes the publisher tag the run with each save's path (`miles.save.<step>`), and map each save to its run
   in `mlflow_runs.json` next to the tracker.
 
-## Running a launcher on AIR
+## Running any launcher on AIR
 
-[`train.yaml`](./train.yaml) runs any launcher built on `ExecuteTrainConfig`, such as
-`scripts/run_qwen3_4b.py`, with all of the above. Set its variables with `--override env_variables.NAME=...`:
+Two jobs run any Miles launcher built on `ExecuteTrainConfig`, from `scripts/run_qwen3_4b.py` to
+`scripts/run_glm5_3_flash.py`:
+
+1. [`prepare.yaml`](./prepare.yaml) runs the launcher's `prepare` step alone (`python -m tools.air.prepare`) on
+   one node: the downloads and the checkpoint conversion. It copies each directory that step fills under
+   `/tmp/miles-air` to `VOLUME_ROOT`, every Megatron tracker last.
+2. [`train.yaml`](./train.yaml) has every node stage those inputs from the Volume, joins the nodes into one Ray
+   cluster, and runs the launcher on the head node with all of the above.
+
+Set their variables with `--override env_variables.NAME=...`:
 - `LAUNCHER`: the script;
-- `LAUNCHER_ARGS`: the launcher's own flags, such as `--mode debug_minimal`;
-- `EXTRA_ARGS`: Miles flags, which come after the launcher's, such as `--num-rollout 4`;
-- `INPUTS`: directories under `VOLUME_ROOT` that every node copies to `/tmp/miles-air` before training.
+- `LAUNCHER_ARGS`: the launcher's own flags. Point its directories at `/tmp/miles-air`, for example
+  `--model-dir /tmp/miles-air/models --data-dir /tmp/miles-air/data`;
+- `INPUTS` (train): directories under `VOLUME_ROOT` that every node copies to `/tmp/miles-air`, such as
+  `models data`;
+- `LAUNCHER_COMMAND` (train): for a launcher with one command per role, the training one, such as `train`
+  for `scripts/run_glm5_3_flash.py`;
+- `EXTRA_ARGS` (train): Miles flags, which come after the launcher's, such as `--num-rollout 4`.
 
 ```bash
-air -p <profile> run tools/air/train.yaml --override \
-  environment.docker_image.url=<registry>/miles-air@sha256:<digest> \
-  env_variables.VOLUME_ROOT=/Volumes/<catalog>/<schema>/<volume>/miles env_variables.RUN_ID=qwen3-4b-check \
-  "env_variables.LAUNCHER_ARGS=--mode debug_minimal --model-dir /tmp/miles-air/models --data-dir /tmp/miles-air/data" \
+COMMON=(environment.docker_image.url=<registry>/miles-air@sha256:<digest>
+  env_variables.VOLUME_ROOT=/Volumes/<catalog>/<schema>/<volume>/miles)
+DIRS="--model-dir /tmp/miles-air/models --data-dir /tmp/miles-air/data"
+air -p <profile> run tools/air/prepare.yaml --override "${COMMON[@]}" "env_variables.LAUNCHER_ARGS=$DIRS"
+air -p <profile> run tools/air/train.yaml --override "${COMMON[@]}" compute.num_accelerators=16 \
+  env_variables.RUN_ID=qwen3-4b-check "env_variables.INPUTS=models data" \
+  "env_variables.LAUNCHER_ARGS=--mode debug_minimal $DIRS" \
   "env_variables.EXTRA_ARGS=--num-rollout 4 --sglang-attention-backend flashinfer"
 ```
 
-The job passes the launcher two sets of flags:
+The train job passes the launcher two sets of flags:
 - `--output-dir /tmp/miles-air/run`, which keeps the launcher's saves on local disk;
 - `--extra-args` with `--load` set to `runs/<RUN_ID>/checkpoints`, the publisher, and the MLflow flags. Miles
   keeps the last `--load` it is given, so this one replaces the launcher's own.
 
-The Qwen3 launchers download their model and data on the head node only, so they run on one node. For more
-nodes, put the inputs on the Volume and list them in `INPUTS`. `examples/air_officeqa/run_officeqa.py` sets the same
-flags through its `--persist-dir` and `--mlflow-run-id` options.
+A launcher that runs `prepare` before every job finds its inputs staged and skips the work. A large converted
+checkpoint need not be copied to every node: point the launcher's checkpoint directory at the Volume instead,
+as `--ckpt-dir /Volumes/<catalog>/<schema>/<volume>/miles/ckpt` for `scripts/run_glm5_3_flash.py`. Its
+reference is read once, on a fresh start. `examples/air_officeqa/run_officeqa.py` sets the train job's flags
+through its own `--persist-dir` and `--mlflow-run-id` options.
 
 ## Things to know
 
