@@ -51,6 +51,28 @@ def test_officeqa_on_eight_nodes_is_the_default_recipe(launcher):
     assert "--rm-type" not in tokens
 
 
+def test_qwen35_trains_on_one_node_and_serves_from_the_other(launcher):
+    call, tokens = _run(launcher, model_name="Qwen3.5-35B-A3B")
+
+    assert call["megatron_model_type"] == "qwen3.5-35B-A3B"
+    assert _value(tokens, "--hf-checkpoint") == "/root/models/Qwen3.5-35B-A3B"
+    assert _value(tokens, "--ref-load") == "/root/ckpt/qwen3.5-35B-A3B_torch_dist"
+    # One node trains with TP2, sequence parallelism, CP4 and EP8; the other serves as one 8-GPU engine.
+    assert _value(tokens, "--actor-num-nodes") == "1"
+    assert _value(tokens, "--rollout-num-gpus") == "8"
+    layout = ("--tensor-model-parallel-size", "--context-parallel-size", "--pipeline-model-parallel-size")
+    assert [_value(tokens, flag) for flag in layout] == ["2", "4", "1"]
+    assert _value(tokens, "--expert-model-parallel-size") == "8"
+    assert "--sequence-parallel" in tokens and "--allgather-cp" not in tokens
+    # The renderer decides the parsers; GLM's engine and trainer flags stay out.
+    assert _value(tokens, "--tito-model") == "qwen35"
+    assert _value(tokens, "--sglang-tool-call-parser") == "qwen3_coder"
+    assert _value(tokens, "--sglang-reasoning-parser") == "qwen3"
+    assert _value(tokens, "--sglang-attention-backend") == "flashinfer"
+    assert "--sglang-dsa-prefill-backend" not in tokens and "--model-name" not in tokens
+    assert tokens[tokens.index("--check-weight-update-skip-list") + 1 : tokens.index("--save")] == ["visual."]
+
+
 def test_officeqa_runs_need_no_environment_setup(launcher):
     call, _ = _run(launcher, data_dir="/data")
 
@@ -94,6 +116,23 @@ def test_prepare_converts_a_staged_checkpoint_without_downloading_it(launcher, m
 
     assert any(command.startswith("hf download zai-org/GLM-5.3-Flash") for command in commands) is not skip_download
     assert [call["hf_checkpoint"] for call in conversions] == ["/staged/models/GLM-5.3-Flash"]
+
+
+def test_prepare_downloads_and_converts_the_chosen_model(launcher, monkeypatch):
+    module, _ = launcher
+    commands, conversions = [], []
+    monkeypatch.setattr(module.U, "exec_command_cpu", commands.append)
+    monkeypatch.setattr(module.U, "convert_checkpoint", lambda **kwargs: conversions.append(kwargs))
+
+    module._prepare(module.ScriptArgs(run_id="test-run", model_name="Qwen3.5-35B-A3B"))
+
+    revision = "59d61f3ce65a6d9863b86d2e96597125219dc754"
+    assert (
+        f"hf download Qwen/Qwen3.5-35B-A3B --revision {revision} --local-dir /root/models/Qwen3.5-35B-A3B" in commands
+    )
+    [conversion] = conversions
+    assert conversion["megatron_model_type"] == conversion["model_name"] == "qwen3.5-35B-A3B"
+    assert conversion["extra_args"] == ""
 
 
 def test_more_nodes_add_rollout_engines(launcher):
@@ -146,6 +185,7 @@ def test_without_an_experiment_or_run_there_is_no_mlflow(launcher):
     ("overrides", "match"),
     [
         ({"num_nodes": 4}, "rollout engines"),
+        ({"model_name": "Qwen3.5-35B-A3B", "num_nodes": 1}, "rollout engines"),
         ({"num_gpus_per_node": 4, "num_nodes": 16}, "eight-GPU nodes"),
         ({"save_hf": True, "skip_saving": True}, "inside a save"),
         ({"n_samples_per_prompt": 1}, "two samples"),
@@ -159,7 +199,8 @@ def test_misconfigured_runs_are_rejected(launcher, overrides, match):
 
 def test_token_capacity_rounds_up_to_the_local_quantum(launcher):
     module, _ = launcher
-    assert module._max_tokens_per_gpu(150000) == 19456
+    assert module._max_tokens_per_gpu(150000, tp=1, cp=8) == 19456
+    assert module._max_tokens_per_gpu(150000, tp=2, cp=4) == 37888
 
 
 @pytest.mark.parametrize("command", ["train", "prepare"])

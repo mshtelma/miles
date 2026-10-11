@@ -1,9 +1,10 @@
-"""Drop-in HF checkpoints of GLM-5.3-Flash inside each training save.
+"""Drop-in HF checkpoints of GLM-5.3-Flash or Qwen3.5-35B-A3B inside each training save.
 
 With ``--save-hf <save>/iter_{rollout_id:07d}/hf``, Miles writes an HF export right after each DCP save.
 The trainer exports through the weight-sync converter, which names tensors as SGLang updates them
-(``model.layers.*``), in the dtypes the trainer holds, and only for the text model. The base is the
-multimodal ``Glm5NextForConditionalGeneration`` checkpoint (``model.language_model.layers.*``).
+(``model.layers.*``), in the dtypes the trainer holds, and only for the text model. Both bases are
+multimodal checkpoints (``model.language_model.layers.*``, ``Glm5NextForConditionalGeneration`` and
+``Qwen3_5MoeForConditionalGeneration``).
 
 ``base_layout`` (``--save-hf-layout-path``) closes that gap as the shards are written: base names, the
 base's float dtype for tensors the trainer upcasts (GLM-5.3 trains its KDA convolutions in FP32 over a
@@ -55,7 +56,7 @@ def base_layout(args) -> "BaseLayout":
 
 
 class BaseLayout:
-    """The GLM-5.3-Flash base checkpoint's layout, for ``SnapshotPublisher.write_model``."""
+    """The base checkpoint's layout, for ``SnapshotPublisher.write_model``."""
 
     def __init__(self, base_dir: Path):
         self._base_dir = base_dir
@@ -115,17 +116,20 @@ def base_name(name: str) -> str:
 
 
 def untrained_in(base_dir: Path):
-    """Base tensors Megatron never holds: the vision tower and the multi-token-prediction layers.
+    """Base tensors Megatron never holds: the vision tower and the multi-token-prediction layers, which
+    GLM-5.3-Flash stores as language layers past the text model's and Qwen3.5 under ``mtp.``.
 
-    The trainer is the 45-layer text model (no MTP training), so these keep the base's values in every
-    checkpoint; serving uses neither (text-only prompts, no speculative decoding).
+    The trainer is the text model (no MTP training), so these keep the base's values in every checkpoint;
+    serving uses neither (text-only prompts, no speculative decoding).
     """
     config = json.loads((base_dir / "config.json").read_text())
     num_layers = config.get("text_config", config)["num_hidden_layers"]
 
     def untrained(name: str) -> bool:
         layer = _LANGUAGE_LAYER.match(name)
-        return name.startswith("model.visual.") or (layer is not None and int(layer.group(1)) >= num_layers)
+        if name.startswith(("model.visual.", "mtp.")):
+            return True
+        return layer is not None and int(layer.group(1)) >= num_layers
 
     return untrained
 

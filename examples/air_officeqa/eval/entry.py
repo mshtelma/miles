@@ -15,6 +15,7 @@ from pathlib import Path
 
 from examples.air_officeqa import settings
 from examples.air_officeqa.eval import driver, proxy, server
+from examples.air_officeqa.models import MODELS, Model
 from tools.air.copy_tree import copy_tree
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ def _parse(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--volume-root", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--model-name", choices=sorted(MODELS), default="GLM-5.3-Flash")
     parser.add_argument("--local-root", type=Path, default=Path("/tmp/miles-air"))
     parser.add_argument("--hf-source", default="base", help="base, or a save's directory .../checkpoints/iter_<step>")
     parser.add_argument("--eval-set", action="append", metavar="NAME=PATH")
@@ -43,10 +45,10 @@ def _parse(argv):
     return args
 
 
-def model_source(volume_root: Path, hf_source: str) -> tuple[Path, dict]:
+def model_source(volume_root: Path, hf_source: str, *, model_name: str) -> tuple[Path, dict]:
     """The HF directory to serve, and what the outputs record about it."""
     if hf_source == "base":
-        return volume_root / "models/GLM-5.3-Flash", {"kind": "base"}
+        return volume_root / "models" / model_name, {"kind": "base"}
     save = Path(hf_source)
     step = int(save.name.removeprefix("iter_"))
     copied = int((save.parent / "latest_checkpointed_iteration.txt").read_text())
@@ -72,13 +74,20 @@ def _eval_sets(values: list[str], input_root: Path) -> dict[str, Path]:
     return sets
 
 
-def _token_counter(model_path: Path):
-    # Tools must be normalized as in training.
+def _tokenizer(model_path: Path):
     from transformers import AutoTokenizer
 
+    return AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
+
+
+def _token_counter(tokenizer, profile: Model):
+    """Count a prompt's tokens as the server renders it: the training chat template, its kwargs, and tools
+    normalized as in training."""
     from miles.utils.chat_template_utils.template import apply_chat_template
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
+    template, template_kwargs = server.chat_template(profile)
+    if template is not None:
+        template_kwargs = {**template_kwargs, "chat_template": Path(template).read_text()}
 
     def count(messages, tools):
         return len(
@@ -88,15 +97,27 @@ def _token_counter(model_path: Path):
                 tools=tools,
                 add_generation_prompt=True,
                 tokenize=True,
-                **server.TEMPLATE_KWARGS,
+                **template_kwargs,
             )
         )
 
     return count
 
 
+def _stop_texts(model_path: Path, tokenizer) -> tuple[str, ...]:
+    """The checkpoint's stop tokens as text (generation_config.json ``eos_token_id``)."""
+    eos = json.loads((model_path / "generation_config.json").read_text())["eos_token_id"]
+    return tuple(tokenizer.convert_ids_to_tokens(eos if isinstance(eos, list) else [eos]))
+
+
 async def _evaluate(args, url: str, model_path: Path, process):
-    chat = proxy.ChatProxy(url, count_prompt_tokens=_token_counter(model_path), max_seq_len=args.max_seq_len)
+    tokenizer = _tokenizer(model_path)
+    chat = proxy.ChatProxy(
+        url,
+        count_prompt_tokens=_token_counter(tokenizer, MODELS[args.model_name]),
+        max_seq_len=args.max_seq_len,
+        stop_texts=_stop_texts(model_path, tokenizer),
+    )
     runner, proxy_url = await proxy.serve(chat)
     task = None
     try:
@@ -157,7 +178,7 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO)
     args = _parse(argv)
     started = time.monotonic()
-    source, model = model_source(args.volume_root, args.hf_source)
+    source, model = model_source(args.volume_root, args.hf_source, model_name=args.model_name)
     model_path = args.local_root / "model"
     copy_tree(source, model_path)
     copy_tree(args.volume_root / "data/officeqa", args.local_root / "data/officeqa")
@@ -166,7 +187,8 @@ def main(argv=None) -> int:
     url = f"http://127.0.0.1:{args.port}"
     log_path = args.local_root / "sglang.log"
     process = server.launch(
-        server.server_argv(model_path, host="127.0.0.1", port=args.port, seed=1234), log_path=log_path
+        server.server_argv(MODELS[args.model_name], model_path, host="127.0.0.1", port=args.port, seed=1234),
+        log_path=log_path,
     )
     try:
         timings["ready_s"] = server.wait_ready(url, process, timeout_s=1800)

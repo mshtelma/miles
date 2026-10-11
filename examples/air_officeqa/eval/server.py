@@ -10,9 +10,9 @@ from pathlib import Path
 
 import httpx
 
-# The training renderer's kwargs (miles/utils/chat_template_utils/tito_tokenizer.py, GLM53TITOTokenizer).
-TEMPLATE_KWARGS = {"clear_thinking": False, "enable_thinking": True}
-SERVED_MODEL_NAME = "glm53-eval"
+from examples.air_officeqa.models import Model
+
+SERVED_MODEL_NAME = "officeqa-eval"
 DEFAULT_PORT = 30000
 # What the recipe exports to its engines (scripts/run_air_officeqa.py, _env_vars).
 SERVER_ENV = {
@@ -21,16 +21,24 @@ SERVER_ENV = {
     "TORCHINDUCTOR_COMPILE_THREADS": "1",
 }
 # Full-support sampling, as every training request sets it. A request that omits these gets the model's
-# generation-config top_p (sampling_defaults='model'), which differs from training and, on this image,
-# JIT-compiles a flashinfer kernel that fails for a missing curand.h and crashes every TP rank.
+# generation-config top_p (sampling_defaults='model'), which differs from training.
 FULL_SUPPORT_SAMPLING = {"top_p": 1.0, "top_k": -1}
-# GLM-5.3's stop tokens (generation_config.json eos_token_id 154829, 154827, 154820). With no_stop_trim
-# the one that ended a turn stays at the end of the returned text.
-STOP_TEXTS = ("<|observation|>", "<|user|>", "<|endoftext|>")
 
 
-def server_argv(model_path: Path, *, host: str, port: int, seed: int) -> list[str]:
-    """The training rollout-engine argv minus training-only flags, plus the training chat-template kwargs."""
+def chat_template(model: Model) -> tuple[str | None, dict]:
+    """The training renderer's chat template, a bundled file or None for the checkpoint's own, and its kwargs."""
+    # Imported on use, as below: the eval's modules import without the training stack (transformers, torch).
+    from miles.utils.chat_template_utils import resolve_fixed_chat_template
+
+    return resolve_fixed_chat_template(model.tito_model)
+
+
+def server_argv(model: Model, model_path: Path, *, host: str, port: int, seed: int) -> list[str]:
+    """The training rollout-engine argv minus training-only flags, plus the training chat template."""
+    from miles.utils.chat_template_utils import resolve_reasoning_and_tool_call_parser
+
+    reasoning_parser, tool_call_parser = resolve_reasoning_and_tool_call_parser(model.tito_model)
+    template, template_kwargs = chat_template(model)
     return [
         sys.executable,
         "-m",
@@ -49,9 +57,9 @@ def server_argv(model_path: Path, *, host: str, port: int, seed: int) -> list[st
         "--random-seed",
         str(seed),
         "--tp-size",
-        "8",
+        str(model.engine_gpus),
         "--ep-size",
-        "8",
+        str(model.engine_gpus),
         "--skip-server-warmup",
         "--enable-metrics",
         "--kv-cache-dtype",
@@ -63,18 +71,14 @@ def server_argv(model_path: Path, *, host: str, port: int, seed: int) -> list[st
         "--chunked-prefill-size",
         "8192",
         "--reasoning-parser",
-        "glm45",
+        reasoning_parser,
         "--tool-call-parser",
-        "glm47",
-        "--dsa-prefill-backend",
-        "tilelang",
-        "--dsa-decode-backend",
-        "tilelang",
-        "--moe-runner-backend",
-        "triton",
+        tool_call_parser,
+        *model.engine_args,
         "--lora-use-virtual-experts",
+        *(["--chat-template", template] if template else []),
         "--default-chat-template-kwargs",
-        json.dumps(TEMPLATE_KWARGS),
+        json.dumps(template_kwargs),
     ]
 
 
@@ -94,7 +98,7 @@ def launch(argv: list[str], *, log_path: Path) -> subprocess.Popen:
 def wait_ready(url: str, process: subprocess.Popen, *, timeout_s: float, poll_s: float = 10.0) -> float:
     """Block until the server answers a one-token chat completion; fail fast if it exits.
 
-    Loading 328 GB of weights and compiling kernels takes minutes, so ``timeout_s`` must be generous.
+    Loading the weights and compiling kernels takes minutes, so ``timeout_s`` must be generous.
     Returns the seconds it took.
     """
     started = time.monotonic()

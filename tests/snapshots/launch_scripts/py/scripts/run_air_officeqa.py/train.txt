@@ -138,9 +138,9 @@ nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l
   --sglang-chunked-prefill-size 8192
   --sglang-max-running-requests 96
   --sglang-mem-fraction-static 0.7
+  --sglang-kv-cache-dtype bfloat16
   --sglang-dsa-prefill-backend tilelang
   --sglang-dsa-decode-backend tilelang
-  --sglang-kv-cache-dtype bfloat16
   --sglang-moe-runner-backend triton
   --router-health-success-threshold 1
   --router-health-check-interval-secs 15

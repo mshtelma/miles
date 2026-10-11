@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 import aiohttp
 from aiohttp import web
 
-from examples.air_officeqa.eval.server import FULL_SUPPORT_SAMPLING, SERVED_MODEL_NAME, STOP_TEXTS
+from examples.air_officeqa.eval.server import FULL_SUPPORT_SAMPLING, SERVED_MODEL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +38,14 @@ class ChatProxy:
         *,
         count_prompt_tokens: Callable[[list, list | None], int],
         max_seq_len: int,
+        stop_texts: tuple[str, ...],
         read_timeout_s: float = 1800.0,
     ) -> None:
         self.url = url
         self.records: list[TurnRecord] = []
         self._count = count_prompt_tokens
         self._max_seq_len = max_seq_len
+        self._stop_texts = stop_texts
         self._timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=read_timeout_s)
         self._session: aiohttp.ClientSession | None = None
 
@@ -69,7 +71,7 @@ class ChatProxy:
         trajectory = request.match_info["trajectory"]
         started = time.monotonic()
         body = await request.json()
-        body = {**body, "messages": _without_stop_texts(body.get("messages") or [])}
+        body = {**body, "messages": _without_stop_texts(body.get("messages") or [], self._stop_texts)}
         try:
             local_tokens = await asyncio.to_thread(self._count, body["messages"], body.get("tools"))
         except Exception as error:  # a render failure must be loud, never a silent zero
@@ -130,7 +132,7 @@ class ChatProxy:
         }
 
 
-def _without_stop_texts(messages: list) -> list:
+def _without_stop_texts(messages: list, stop_texts: tuple[str, ...]) -> list:
     """Drop the stop token that ends each assistant turn's text (``no_stop_trim`` keeps it).
 
     Training appends the next message's tokens right after the generated stop token. Re-rendered from
@@ -141,7 +143,7 @@ def _without_stop_texts(messages: list) -> list:
     for message in messages:
         content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, str) and message.get("role") == "assistant":
-            for stop in STOP_TEXTS:
+            for stop in stop_texts:
                 if content.endswith(stop):
                     message = {**message, "content": content.removesuffix(stop)}
                     break

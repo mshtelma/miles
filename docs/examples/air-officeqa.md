@@ -24,7 +24,7 @@ Three AIR jobs, in order:
 | [`eval.yaml`](https://github.com/radixark/miles/blob/main/examples/air_officeqa/air/eval.yaml) | 1 | ~1 h | `runs/<EVAL_RUN_ID>/<mlflow-run-id>/`: rewards, pass@k and trajectories |
 
 `VOLUME_ROOT` is a directory on a Unity Catalog Volume, and every job reads and writes only there. All
-three jobs log to the MLflow experiment `glm53-flash-officeqa`.
+three jobs log to the MLflow experiment `air-officeqa`.
 
 ## Before you start
 

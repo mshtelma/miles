@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from examples.air_officeqa.eval import server
+from examples.air_officeqa.models import MODELS
 
 # A training rollout engine's own command line (from its log), minus host/port/seed values.
 _TRAINING_FLAGS = (
@@ -27,7 +28,9 @@ _TRAINING_ONLY = {
 
 
 def test_argv_keeps_every_engine_flag_but_the_training_only_ones() -> None:
-    argv = server.server_argv(Path("/tmp/miles-air/models/m"), host="10.0.0.2", port=30000, seed=1235)
+    argv = server.server_argv(
+        MODELS["GLM-5.3-Flash"], Path("/tmp/miles-air/models/m"), host="10.0.0.2", port=30000, seed=1235
+    )
 
     flags = [token for token in argv[3:] if token.startswith("--")]
     expected = [flag for flag in _TRAINING_FLAGS if flag.startswith("--") and flag not in _TRAINING_ONLY]
@@ -37,6 +40,19 @@ def test_argv_keeps_every_engine_flag_but_the_training_only_ones() -> None:
     assert argv[:3] == [sys.executable, "-m", "sglang.launch_server"]
     kwargs = json.loads(argv[argv.index("--default-chat-template-kwargs") + 1])
     assert kwargs == {"clear_thinking": False, "enable_thinking": True}
+    assert "--chat-template" not in argv  # GLM-5.3's renderer keeps the checkpoint's own template
+
+
+def test_qwen35_is_served_with_its_renderers_template_and_parsers() -> None:
+    argv = server.server_argv(MODELS["Qwen3.5-35B-A3B"], Path("/tmp/m"), host="10.0.0.2", port=30000, seed=1)
+
+    def value(flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    assert (value("--reasoning-parser"), value("--tool-call-parser")) == ("qwen3", "qwen3_coder")
+    assert Path(value("--chat-template")).name == "qwen3.5_fixed.jinja"
+    assert json.loads(value("--default-chat-template-kwargs")) == {"preserve_thinking": True}
+    assert value("--attention-backend") == "flashinfer" and "--dsa-prefill-backend" not in argv
 
 
 def test_the_readiness_probe_samples_like_the_eval(tmp_path: Path) -> None:

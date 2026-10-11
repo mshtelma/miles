@@ -1,4 +1,4 @@
-"""A GLM-5.3 HF export takes the base checkpoint's names, dtypes and shapes, plus its untrained tensors."""
+"""An HF export takes the base checkpoint's names, dtypes and shapes, plus its untrained tensors."""
 
 import json
 import struct
@@ -79,6 +79,20 @@ def test_a_sync_named_export_gets_the_base_layout_and_its_untrained_tensors(tmp_
     assert final["model.visual.blocks.0.attn.qkv.weight"] == original["model.visual.blocks.0.attn.qkv.weight"]
     eh_proj = "model.language_model.layers.4.eh_proj.weight"
     assert final[eh_proj] == original[eh_proj]
+
+
+def test_qwen35_multi_token_prediction_layer_is_copied_from_the_base(tmp_path) -> None:
+    # Qwen3.5 keeps its MTP layer under mtp., outside the language model's layers.
+    base_tensors = {
+        **_BASE_LAYOUT,
+        "mtp.fc.weight": ("BF16", [2], b"\x31\x32\x33\x34"),
+        "mtp.layers.0.mlp.gate.weight": ("BF16", [1], b"\x35\x36"),
+    }
+    base, hf_dir = _export(tmp_path, _SYNC_NAMED, base_tensors=base_tensors)
+
+    final, original = _tensor_bytes(hf_dir), _tensor_bytes(base)
+    assert final["mtp.fc.weight"] == original["mtp.fc.weight"]
+    assert final["mtp.layers.0.mlp.gate.weight"] == original["mtp.layers.0.mlp.gate.weight"]
 
 
 def test_a_trained_tensor_the_export_dropped_is_never_filled_from_the_base(tmp_path) -> None:

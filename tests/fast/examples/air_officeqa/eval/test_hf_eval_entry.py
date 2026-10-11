@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from examples.air_officeqa.eval import entry
+from examples.air_officeqa.models import MODELS
 
 
 def test_eval_set_paths_are_relative_to_staged_inputs(tmp_path):
@@ -44,9 +45,28 @@ def test_the_token_counter_renders_a_prior_tool_call_the_way_sglang_does(tmp_pat
         {"role": "tool", "tool_call_id": "c1", "content": "obs"},
     ]
 
-    count = entry._token_counter(tmp_path)
+    count = entry._token_counter(entry._tokenizer(tmp_path), MODELS["GLM-5.3-Flash"])
 
     assert count(messages, None) == len("user q assistant query x tool obs".split())
+
+
+def test_stop_texts_are_the_checkpoints_eos_tokens(tmp_path) -> None:
+    class Tokenizer:
+        def convert_ids_to_tokens(self, ids):
+            return [{248046: "<|im_end|>", 248044: "<|endoftext|>"}[token] for token in ids]
+
+    (tmp_path / "generation_config.json").write_text(json.dumps({"eos_token_id": [248046, 248044]}))
+    assert entry._stop_texts(tmp_path, Tokenizer()) == ("<|im_end|>", "<|endoftext|>")
+    (tmp_path / "generation_config.json").write_text(json.dumps({"eos_token_id": 248046}))
+    assert entry._stop_texts(tmp_path, Tokenizer()) == ("<|im_end|>",)
+
+
+@pytest.mark.parametrize("model_name", sorted(MODELS))
+def test_the_base_model_is_served_from_its_own_directory(tmp_path, model_name) -> None:
+    assert entry.model_source(tmp_path, "base", model_name=model_name) == (
+        tmp_path / "models" / model_name,
+        {"kind": "base"},
+    )
 
 
 def _save(root: Path, step: int, *, copied: int, runs: dict | None = None) -> Path:
@@ -62,7 +82,7 @@ def _save(root: Path, step: int, *, copied: int, runs: dict | None = None) -> Pa
 def test_a_save_is_served_from_its_hf_export_with_its_training_run(tmp_path):
     save = _save(tmp_path, 25, copied=50, runs={"25": "train-run"})
 
-    path, model = entry.model_source(tmp_path, str(save))
+    path, model = entry.model_source(tmp_path, str(save), model_name="GLM-5.3-Flash")
 
     assert path == save / "hf"
     assert model == {"kind": "checkpoint", "path": str(save), "rollout_id": 25, "mlflow_run_id": "train-run"}
@@ -72,7 +92,7 @@ def test_a_save_the_copy_has_not_reached_is_refused(tmp_path):
     save = _save(tmp_path, 25, copied=0)
 
     with pytest.raises(ValueError, match="fully copied"):
-        entry.model_source(tmp_path, str(save))
+        entry.model_source(tmp_path, str(save), model_name="GLM-5.3-Flash")
 
 
 def test_the_eval_reads_the_file_the_publisher_writes():

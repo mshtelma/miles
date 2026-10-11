@@ -10,6 +10,8 @@ from aiohttp import web
 
 from examples.air_officeqa.eval import proxy
 
+# GLM-5.3-Flash's stop tokens (generation_config.json eos_token_id 154829, 154827, 154820).
+_GLM_STOPS = ("<|observation|>", "<|user|>", "<|endoftext|>")
 _OK = {
     "id": "chatcmpl-1",
     "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
@@ -79,7 +81,9 @@ async def _post(url: str, trajectory: str, body: dict) -> tuple[int, dict]:
 
 
 async def _serve(server_url: str, *, tokens: int = 10, max_seq_len: int = 150_000):
-    chat = proxy.ChatProxy(server_url, count_prompt_tokens=lambda messages, tools: tokens, max_seq_len=max_seq_len)
+    chat = proxy.ChatProxy(
+        server_url, count_prompt_tokens=lambda messages, tools: tokens, max_seq_len=max_seq_len, stop_texts=_GLM_STOPS
+    )
     runner, url = await proxy.serve(chat)
     return chat, runner, url
 
@@ -133,6 +137,7 @@ async def test_prior_assistant_turns_lose_their_trailing_stop_token_before_rende
         await upstream.start(),
         count_prompt_tokens=lambda messages, tools: seen.append(messages) or 10,
         max_seq_len=150_000,
+        stop_texts=_GLM_STOPS,
     )
     runner, url = await proxy.serve(chat)
     call = {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
@@ -201,7 +206,9 @@ async def test_a_render_failure_is_loud_not_a_zero_token_count() -> None:
     def broken(messages, tools):
         raise ValueError("template error")
 
-    chat = proxy.ChatProxy(await upstream.start(), count_prompt_tokens=broken, max_seq_len=150_000)
+    chat = proxy.ChatProxy(
+        await upstream.start(), count_prompt_tokens=broken, max_seq_len=150_000, stop_texts=_GLM_STOPS
+    )
     runner, url = await proxy.serve(chat)
     try:
         status, body = await _post(url, "a", {"messages": []})
