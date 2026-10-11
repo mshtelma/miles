@@ -24,7 +24,7 @@ GLM5.2 flagships, not a smaller cut of them.
 
 ## 2. Layout
 
-`scripts/run_glm5_3_flash.py` trains on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12
+`scripts/run_air_officeqa.py` trains on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12
 layers) EP8, and the others serve the policy as 8-GPU SGLang engines, fully async. More nodes add
 engines.
 
@@ -41,7 +41,7 @@ The recipe runs on the Databricks AI Runtime image built from `docker/air/Docker
 Download and convert the checkpoint (`--ref-load` resolves to `<--ckpt-dir>/glm5.3-flash_torch_dist`):
 
 ```bash
-python scripts/run_glm5_3_flash.py prepare                      # 1 node
+python scripts/run_air_officeqa.py prepare                      # 1 node
 ```
 
 Build the OfficeQA prompt files and corpus. The script downloads the gated `databricks/officeqa` dataset
@@ -49,7 +49,7 @@ at a pinned revision, so accept its terms on Hugging Face and export a token fir
 bulletins as the dataset's own text rendering, and cuts them into the passages the agent's search ranks:
 
 ```bash
-HF_TOKEN=<token> python -m examples.glm5_3_flash.officeqa.prepare_data --out-dir /root/datasets/officeqa
+HF_TOKEN=<token> python -m examples.air_officeqa.prepare_data --out-dir /root/datasets/officeqa
 ```
 
 The script trains on all 113 easy questions and 90 of the 133 hard ones, and holds out the other 43
@@ -60,7 +60,7 @@ hard questions in `eval_heldout.jsonl`.
 On an 8-node Ray cluster (`MILES_SCRIPT_EXTERNAL_RAY=1`), from the head node:
 
 ```bash
-python scripts/run_glm5_3_flash.py train --save-hf
+python scripts/run_air_officeqa.py train --save-hf
 ```
 
 The defaults are the recipe:
@@ -72,7 +72,7 @@ The defaults are the recipe:
 - a save every 10 steps.
 
 The reward credits a correct answer only if an LLM judge confirms the cited path supports it. The
-judge is a Databricks serving endpoint, listed in `examples/glm5_3_flash/officeqa/judges.json`, so
+judge is a Databricks serving endpoint, listed in `examples/air_officeqa/judges.json`, so
 the workers need `DATABRICKS_HOST` and `DATABRICKS_TOKEN`.
 
 `--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`, in the base model's layout).
@@ -80,14 +80,14 @@ The trainer waits for it: in the 8-node recipe, a save with the export takes
 10 to 12 minutes. Without `--save-hf`, convert a save later with `tools/convert_torch_dist_to_hf.py`.
 
 On Databricks AI Runtime, three jobs run the whole flow: prepare, train and evaluate. See
-[GLM-5.3-Flash on OfficeQA](/examples/glm5-3-flash).
+[GLM-5.3-Flash on OfficeQA](/examples/air-officeqa).
 
 ## 5. Evaluation
 
-`examples/glm5_3_flash/officeqa/air/eval.yaml` scores the base model or a `--save-hf` checkpoint on
+`examples/air_officeqa/air/eval.yaml` scores the base model or a `--save-hf` checkpoint on
 the held-out questions: a standalone SGLang server set up like the rollout engines, running the
 training agent, tools and reward. See
-[GLM-5.3-Flash on OfficeQA](/examples/glm5-3-flash#3-evaluate).
+[GLM-5.3-Flash on OfficeQA](/examples/air-officeqa#3-evaluate).
 
 ## 6. What a Healthy Run Looks Like
 

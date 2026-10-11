@@ -2,7 +2,7 @@
 
 Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory holds the two helpers Miles
 uses there and a training job for any Miles launcher, and this page describes how Miles maps onto AIR. The
-[GLM-5.3-Flash example](../../examples/glm5_3_flash/README.md) is a complete flow built from these pieces:
+[GLM-5.3-Flash example](../../examples/air_officeqa/README.md) is a complete flow built from these pieces:
 prepare, train and evaluate.
 
 ## How an AIR job runs
@@ -89,7 +89,7 @@ The job passes the launcher two sets of flags:
   keeps the last `--load` it is given, so this one replaces the launcher's own.
 
 The Qwen3 launchers download their model and data on the head node only, so they run on one node. For more
-nodes, put the inputs on the Volume and list them in `INPUTS`. `scripts/run_glm5_3_flash.py` sets the same
+nodes, put the inputs on the Volume and list them in `INPUTS`. `scripts/run_air_officeqa.py` sets the same
 flags through its `--persist-dir` and `--mlflow-run-id` options.
 
 ## Things to know

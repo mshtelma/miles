@@ -1,6 +1,6 @@
 """Copy each training save from the nodes' local disks to the Volume while training goes on.
 
-``scripts/run_glm5_3_flash.py --persist-dir DIR`` sets ``--checkpoint-publisher-path`` to
+``scripts/run_air_officeqa.py --persist-dir DIR`` sets ``--checkpoint-publisher-path`` to
 ``VolumePublisher`` and exports ``MILES_PERSIST_DIR=DIR``. Megatron saves to ``--save`` on each node's
 local disk. Once the trainer and the rollout state are saved, one task per node copies that node's part of
 the save into DIR and deletes it locally. Megatron's tracker, ``latest_checkpointed_iteration.txt``, is

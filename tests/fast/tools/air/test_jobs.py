@@ -6,9 +6,9 @@ from omegaconf import OmegaConf
 
 _ROOT = Path(__file__).resolve().parents[4]
 _JOBS = [
-    "examples/glm5_3_flash/officeqa/air/prepare.yaml",
-    "examples/glm5_3_flash/officeqa/air/train.yaml",
-    "examples/glm5_3_flash/officeqa/air/eval.yaml",
+    "examples/air_officeqa/air/prepare.yaml",
+    "examples/air_officeqa/air/train.yaml",
+    "examples/air_officeqa/air/eval.yaml",
     "tools/air/train.yaml",
 ]
 

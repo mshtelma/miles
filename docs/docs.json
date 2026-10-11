@@ -253,7 +253,7 @@
       "pages": [
        "examples/geo3k-vlm",
        "examples/geo3k-vlm/multi-turn",
-       "examples/glm5-3-flash",
+       "examples/air-officeqa",
        "examples/multi-lora",
        "examples/on-policy-distillation",
        "examples/on-policy-distillation/qwen3-5-35b-selfdistill",
