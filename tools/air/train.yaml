@@ -1,6 +1,7 @@
-# Train with any Miles launcher on AIR. Every node joins one Ray cluster and the head node runs LAUNCHER. Saves
-# are copied to runs/<RUN_ID>/checkpoints on the Volume, and resubmitting the same RUN_ID resumes from the
-# newest one. Miles logs into the job's MLflow run, named RUN_ID.
+# Train with any Miles launcher on AIR. Every node stages INPUTS from the Volume (tools/air/prepare.yaml puts them
+# there) and joins one Ray cluster, and the head node runs LAUNCHER. Saves are copied to runs/<RUN_ID>/checkpoints
+# on the Volume, and resubmitting the same RUN_ID resumes from the newest one. Miles logs into the job's MLflow
+# run, named RUN_ID.
 experiment_name: miles
 compute:
   num_accelerators: 8  # all GPUs: 8 is one node, 16 two
@@ -18,6 +19,7 @@ env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
   RUN_ID: miles-run
   LAUNCHER: scripts/run_qwen3_4b.py
+  LAUNCHER_COMMAND: ""  # for a launcher with one command per role, the training one: train for run_kimi_k3.py
   LAUNCHER_ARGS: --model-dir /tmp/miles-air/models --data-dir /tmp/miles-air/data
   EXTRA_ARGS: ""  # Miles flags, after the launcher's own; on H100: --sglang-attention-backend flashinfer
   INPUTS: ""  # directories under VOLUME_ROOT that every node copies to /tmp/miles-air, e.g. models/Qwen3-4B
@@ -37,7 +39,8 @@ command: |
     --disable-usage-stats --dashboard-host=127.0.0.1
   eval "set -- $LAUNCHER_ARGS"
   set +e
-  MILES_SCRIPT_EXTERNAL_RAY=1 python "$LAUNCHER" --num-nodes "$NUM_NODES" --output-dir "$LOCAL/run" "$@" \
+  MILES_SCRIPT_EXTERNAL_RAY=1 python "$LAUNCHER" $LAUNCHER_COMMAND --num-nodes "$NUM_NODES" \
+    --output-dir "$LOCAL/run" "$@" \
     --extra-env-vars "MILES_PERSIST_DIR=$RUN/checkpoints" \
     --extra-args "--load $RUN/checkpoints --checkpoint-publisher-path tools.air.publisher.VolumePublisher \
       --use-mlflow --mlflow-tracking-uri databricks --mlflow-run-id $MLFLOW_RUN_ID --mlflow-run-name $RUN_ID \

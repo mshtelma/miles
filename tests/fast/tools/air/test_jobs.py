@@ -9,6 +9,7 @@ _JOBS = [
     "examples/air_officeqa/air/prepare.yaml",
     "examples/air_officeqa/air/train.yaml",
     "examples/air_officeqa/air/eval.yaml",
+    "tools/air/prepare.yaml",
     "tools/air/train.yaml",
 ]
 
