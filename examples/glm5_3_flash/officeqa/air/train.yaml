@@ -1,5 +1,5 @@
-# Train on eight nodes. Saves are copied to runs/<RUN_ID>/checkpoints; resubmitting the same RUN_ID resumes
-# from the newest one.
+# Train on eight nodes. Saves are copied to runs/<RUN_ID>/checkpoints; resubmitting the same RUN_ID, or a
+# retry after a failure, resumes from the newest one.
 experiment_name: glm53-flash-officeqa
 compute:
   num_accelerators: 64
@@ -11,12 +11,12 @@ code_source:
   type: snapshot
   snapshot:
     root_path: ../../../..  # relative to this YAML
-max_retries: 0
-timeout_minutes: 2880
+max_retries: 2
+timeout_minutes: 2880  # for all attempts together
 env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
   RUN_ID: glm53-flash-officeqa
-  TRAIN_ARGS: --save-hf --mlflow-experiment glm53-flash-officeqa
+  TRAIN_ARGS: --save-hf
 command: |
   set -euo pipefail
   cd "$CODE_SOURCE_PATH"
@@ -33,19 +33,11 @@ command: |
   fi
   ray start --head --node-ip-address="$MASTER_ADDR" --port=6379 --num-gpus="$LOCAL_WORLD_SIZE" \
     --disable-usage-stats --dashboard-host=127.0.0.1
-  # air logs keeps only the start of a job's output, so the launcher's log goes to the Volume every minute.
-  mkdir -p "$RUN/logs"
-  LOG="$LOCAL/launcher.log"
-  (while sleep 60; do cp "$LOG" "$RUN/logs/$MLFLOW_RUN_ID.log" || true; done) &
-  MIRROR=$!
   eval "set -- $TRAIN_ARGS"
   set +e
   MILES_SCRIPT_EXTERNAL_RAY=1 python scripts/run_glm5_3_flash.py train --run-id "$RUN_ID" \
     --num-nodes "$NUM_NODES" --output-dir "$LOCAL/run" --model-dir "$LOCAL/models" --data-dir "$LOCAL/data" \
-    --ckpt-dir "$VOLUME_ROOT/ckpt" --persist-dir "$RUN/checkpoints" --mlflow-run-id "$MLFLOW_RUN_ID" \
-    "$@" > "$LOG" 2>&1
+    --ckpt-dir "$VOLUME_ROOT/ckpt" --persist-dir "$RUN/checkpoints" --mlflow-run-id "$MLFLOW_RUN_ID" "$@"
   code=$?
-  kill "$MIRROR"
-  cp "$LOG" "$RUN/logs/$MLFLOW_RUN_ID.log"
   ray stop --force
   exit "$code"

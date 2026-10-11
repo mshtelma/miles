@@ -1,5 +1,7 @@
-# Score the base model or a training save's HF export with one SGLang server on one node.
-experiment_name: glm53-flash-officeqa-eval
+# Score the base model or a training save's HF export with one SGLang server on one node. The eval logs to the
+# training experiment, and the scores of a save also go into the training run at the save's step.
+experiment_name: glm53-flash-officeqa
+mlflow_run_name: eval
 compute:
   num_accelerators: 8
   accelerator_type: GPU_8xB300
@@ -10,7 +12,7 @@ code_source:
   type: snapshot
   snapshot:
     root_path: ../../../..  # relative to this YAML
-max_retries: 0
+max_retries: 1
 timeout_minutes: 480
 env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles

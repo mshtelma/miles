@@ -1,7 +1,9 @@
 """Treasury Bulletin corpus and the four retrieval tools of the OfficeQA agent.
 
-Documents are read from the pinned corpus zip, held as one immutable object per process. A tool result
-may be 32,000 characters, so a 150K-token episode can hold whole tables instead of 40-line slices.
+The documents are OfficeQA's own text rendering of the bulletins, the ``transformed`` zip of the
+``databricks/officeqa`` dataset, held as one immutable object per process. ``build_chunks`` cuts each
+bulletin into the passages search ranks. A tool result may be 32,000 characters, so a 150K-token
+episode can hold whole tables instead of 40-line slices.
 
 Search uses BM25 (``bm25s``, installed in the AIR image) when it is importable, otherwise keyword
 overlap. A policy-supplied grep regex runs in the calling thread; a pathological pattern is bounded
@@ -21,8 +23,9 @@ try:
 except ImportError:  # optional: search falls back to keyword overlap
     bm25s = None
 
-CORPUS_ZIP = "treasury_bulletins_clean.zip"
+CORPUS_ZIP = "treasury_bulletins_transformed.zip"
 CHUNKS_FILE = "chunks.jsonl"
+CHUNK_CHARS = 3000
 SEARCH_TOP_K = 6
 TOOL_MAX_CHARS = 32_000
 READ_MAX_LINES = 400
@@ -47,6 +50,29 @@ def load_corpus(data_dir: Path) -> Corpus:
         if data_dir not in _loaded:
             _loaded[data_dir] = _read_corpus(data_dir)
         return _loaded[data_dir]
+
+
+def build_chunks(name: str, text: str) -> list[dict[str, str]]:
+    """Cut one bulletin into search passages of up to ``CHUNK_CHARS`` characters.
+
+    Blank lines separate the text's paragraphs and tables, and consecutive blocks share a passage while
+    they fit. A longer table is cut between rows, each piece keeping the header row. Every passage starts
+    with the document's name and date, so a search for a year matches its bulletins."""
+    date = bulletin_date(name)
+    passages: list[list[str]] = []
+    for piece in (piece for block in _blocks(text) for piece in _pieces(block)):
+        if passages and len("\n\n".join([*passages[-1], piece])) <= CHUNK_CHARS:
+            passages[-1].append(piece)
+        else:
+            passages.append([piece])
+    prefix = f"Document: {name}\nBulletin date: {date}\n\n"
+    return [{"content": prefix + "\n\n".join(passage), "source": name, "bulletin_date": date} for passage in passages]
+
+
+def bulletin_date(name: str) -> str:
+    """``treasury_bulletin_1940_06.txt`` -> ``1940-06``."""
+    year, month = Path(name).stem.split("_")[-2:]
+    return f"{year}-{month}"
 
 
 def search_documents(corpus: Corpus, query: str, top_k: int = SEARCH_TOP_K) -> str:
@@ -184,6 +210,26 @@ def _grep_hits(corpus: Corpus, files: list[str], match) -> tuple[list[str], int]
                 if len(hits) >= GREP_MAX_MATCHES:
                     return hits, scanned
     return hits, scanned
+
+
+def _blocks(text: str) -> list[str]:
+    return [block.strip("\n") for block in re.split(r"\n\s*\n", text) if block.strip()]
+
+
+def _pieces(block: str) -> list[str]:
+    """The block itself, or line runs of up to CHUNK_CHARS; a table repeats its header and rule lines."""
+    if len(block) <= CHUNK_CHARS:
+        return [block]
+    lines = block.splitlines()
+    header = lines[:2] if lines[0].startswith("|") and len(lines) > 2 else []
+    pieces, current = [], list(header)
+    for line in lines[len(header) :]:
+        if len(current) > len(header) and len("\n".join([*current, line])) > CHUNK_CHARS:
+            pieces.append("\n".join(current))
+            current = list(header)
+        current.append(line)
+    pieces.append("\n".join(current))
+    return pieces
 
 
 def _corpus_files(corpus: Corpus, year: str = "") -> list[str]:

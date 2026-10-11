@@ -109,12 +109,11 @@ def test_official_split_trains_on_every_easy_question_and_holds_out_the_rest_of_
 
 
 def test_prepare_data_writes_a_self_contained_run_directory(tmp_path):
-    corpus_dir = tmp_path / "corpus"
-    corpus_dir.mkdir()
-    with zipfile.ZipFile(corpus_dir / corpus.CORPUS_ZIP, "w") as archive:
-        archive.writestr("treasury_bulletin_1940_06.txt", _JUNE_1940)
-    (corpus_dir / corpus.CHUNKS_FILE).write_text("{}\n")
-    questions = tmp_path / "officeqa_full.csv"
+    source = tmp_path / "officeqa"
+    source.mkdir()
+    with zipfile.ZipFile(source / corpus.CORPUS_ZIP, "w") as archive:
+        archive.writestr("transformed/treasury_bulletin_1940_06.txt", _JUNE_1940)
+    questions = source / "officeqa_full.csv"
     with questions.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=["uid", "question", "answer", "difficulty", "source_files"])
         writer.writeheader()
@@ -130,10 +129,8 @@ def test_prepare_data_writes_a_self_contained_run_directory(tmp_path):
             sys.executable,
             "-m",
             "examples.glm5_3_flash.officeqa.prepare_data",
-            "--questions",
-            str(questions),
-            "--corpus-dir",
-            str(corpus_dir),
+            "--source",
+            str(source),
             "--out-dir",
             str(out_dir),
             "--hard-train",
@@ -154,3 +151,32 @@ def test_prepare_data_writes_a_self_contained_run_directory(tmp_path):
     rows = [json.loads(line) for line in (out_dir / "train.jsonl").read_text().splitlines()]
     assert len(rows) == 4 and {row["metadata"]["tool_context"]["dataset"] for row in rows} == {"officeqa"}
     assert len((out_dir / "eval_heldout.jsonl").read_text().splitlines()) == 2
+    [chunk] = [json.loads(line) for line in (out_dir / corpus.CHUNKS_FILE).read_text().splitlines()]
+    assert chunk["source"] == "treasury_bulletin_1940_06.txt" and chunk["bulletin_date"] == "1940-06"
+
+
+def test_consecutive_blocks_share_a_passage_while_they_fit(monkeypatch):
+    monkeypatch.setattr(corpus, "CHUNK_CHARS", 40)
+    text = "first paragraph\n\nsecond paragraph\n\n\nthird paragraph that is long"
+
+    chunks = corpus.build_chunks("treasury_bulletin_1940_06.txt", text)
+
+    prefix = "Document: treasury_bulletin_1940_06.txt\nBulletin date: 1940-06\n\n"
+    assert [chunk["content"] for chunk in chunks] == [
+        prefix + "first paragraph\n\nsecond paragraph",
+        prefix + "third paragraph that is long",
+    ]
+
+
+def test_a_long_table_is_cut_between_rows_and_each_piece_keeps_the_header(monkeypatch):
+    monkeypatch.setattr(corpus, "CHUNK_CHARS", 60)
+    rows = [f"| row {index} | {index * 100} |" for index in range(6)]
+    table = "\n".join(["| Item | Amount |", "| --- | --- |", *rows])
+
+    bodies = [
+        chunk["content"].split("\n\n", 1)[1] for chunk in corpus.build_chunks("treasury_bulletin_1940_06.txt", table)
+    ]
+
+    assert len(bodies) > 1
+    assert all(body.startswith("| Item | Amount |\n| --- | --- |\n| row") for body in bodies)
+    assert [line for body in bodies for line in body.splitlines()[2:]] == rows
