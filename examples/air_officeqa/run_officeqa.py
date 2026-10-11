@@ -115,8 +115,11 @@ _RECIPES: dict[str, _Recipe] = {
         layout_args=("--sequence-parallel", "--log-probs-chunk-size", "4096"),
         convert_args="",
         weight_check_skip=("visual.",),
-        # Megatron's own FlashAttention-2 path, as scripts/run_qwen3_5_35b_a3b_mtp.py uses off Blackwell.
-        model_args=("--attention-backend", "flash"),
+        # Megatron's own FlashAttention-2 path, as scripts/run_qwen3_5_35b_a3b_mtp.py uses off Blackwell. The model
+        # definition adds the MTP block, whose loss Megatron takes over the whole vocabulary at once, even for
+        # log-probabilities: at 150K tokens that alone overflows an H100. RL trains without it, and the HF export
+        # carries the base model's MTP unchanged.
+        model_args=("--attention-backend", "flash", "--mtp-num-layers", "0"),
         # One H100 engine holds about 68 OfficeQA sessions (2.4M tokens of KV cache): a step's 64 episodes.
         max_concurrent_samples=64,
     ),

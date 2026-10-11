@@ -73,6 +73,8 @@ def test_qwen35_trains_on_one_node_and_serves_from_the_other(launcher):
     assert _value(tokens, "--sglang-attention-backend") == "flashinfer"
     assert "--sglang-dsa-prefill-backend" not in tokens and "--model-name" not in tokens
     assert tokens[tokens.index("--check-weight-update-skip-list") + 1 : tokens.index("--save")] == ["visual."]
+    # The model definition's MTP block is turned off: its full-vocabulary loss does not fit at 150K tokens.
+    assert _value(tokens, "--mtp-num-layers") == "0" and "--enable-mtp-training" not in tokens
 
 
 def test_officeqa_runs_need_no_environment_setup(launcher):
