@@ -18,7 +18,7 @@ Three AIR jobs, in order:
 | --- | --- | --- | --- |
 | [`prepare.yaml`](./officeqa/air/prepare.yaml) | 1 | ~40 min | `data/officeqa/`: prompts and corpus; `models/GLM-5.3-Flash/`: the HF checkpoint; `ckpt/glm5.3-flash_torch_dist/`: its Megatron conversion |
 | [`train.yaml`](./officeqa/air/train.yaml) | 8 | ~45 min for the first step, then ~5 min a step | `runs/<RUN_ID>/checkpoints/`: one save every 10 steps, each with a drop-in HF checkpoint in `iter_<step>/hf` |
-| [`eval.yaml`](./officeqa/air/eval.yaml) | 1 | ~20 min | `runs/<EVAL_RUN_ID>/<attempt>/`: rewards, pass@k and trajectories |
+| [`eval.yaml`](./officeqa/air/eval.yaml) | 1 | ~1 h | `runs/<EVAL_RUN_ID>/<mlflow-run-id>/`: rewards, pass@k and trajectories |
 
 `VOLUME_ROOT` is a directory on a Unity Catalog Volume, and every job reads and writes only there. All
 three jobs log to the MLflow experiment `glm53-flash-officeqa`.
@@ -111,10 +111,11 @@ air -p <profile> logs <job-run-id> --download-to logs/  # every node, complete
 training goes on. A save's HF export holds the trainer 10 to 12 minutes. Only the newest save keeps its 4.4 TB
 training state; the older ones keep just their 328 GB HF checkpoint.
 
-**Resume.** AIR retries a failed attempt up to twice, and you can submit the job again with the same
-`RUN_ID`; either way it resumes from the newest save. Keep `--num-rollout`, because Megatron rejects a
-different learning-rate schedule. Each attempt is its own MLflow run, named after `RUN_ID`. The job's 48-hour
-`timeout_minutes` covers all attempts and the time spent waiting for GPUs.
+**Resume.** The jobs don't retry on their own, because a failed attempt would most likely fail the same
+way. Once the cause is fixed, submit the job again with the same `RUN_ID`, and it resumes from the newest
+save. Keep `--num-rollout`, because Megatron rejects a different learning-rate schedule. Each submission is
+its own MLflow run, named after `RUN_ID`. The job's 48-hour `timeout_minutes` includes the time spent
+waiting for GPUs.
 
 ## 3. Evaluate
 
@@ -131,7 +132,7 @@ training agent, tools and reward on the 43 held-out questions, eight samples eac
 copy has finished and its HF export is complete. `EVAL_ARGS` takes the flags of
 [`officeqa/eval/entry.py`](./officeqa/eval/entry.py), such as `--samples-per-prompt 4` or `--limit-questions 3`.
 
-Each eval writes these files to `runs/<EVAL_RUN_ID>/<attempt>/`:
+Each eval writes these files to `runs/<EVAL_RUN_ID>/<mlflow-run-id>/`:
 - `eval_results.json`: the rewards per question;
 - `summary.json`: pass@k, questions solved and lost trajectories;
 - `trajectories.jsonl`;

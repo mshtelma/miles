@@ -1,6 +1,6 @@
 # Train with any Miles launcher on AIR. Every node joins one Ray cluster and the head node runs LAUNCHER. Saves
-# are copied to runs/<RUN_ID>/checkpoints on the Volume; resubmitting the same RUN_ID, or a retry after a
-# failure, resumes from the newest one. Miles logs into each attempt's MLflow run, named RUN_ID.
+# are copied to runs/<RUN_ID>/checkpoints on the Volume, and resubmitting the same RUN_ID resumes from the
+# newest one. Miles logs into the job's MLflow run, named RUN_ID.
 experiment_name: miles
 compute:
   num_accelerators: 8  # all GPUs: 8 is one node, 16 two
@@ -12,8 +12,8 @@ code_source:
   type: snapshot
   snapshot:
     root_path: ../..  # relative to this YAML
-max_retries: 2
-timeout_minutes: 720  # for all attempts together
+max_retries: 0  # a failed attempt would fail the same way; AIR's default is 3
+timeout_minutes: 720  # including the wait for GPUs
 env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
   RUN_ID: miles-run

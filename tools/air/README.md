@@ -54,7 +54,9 @@ directory, [`publisher.py`](./publisher.py) copies each save to that directory w
 writes Megatron's tracker `latest_checkpointed_iteration.txt` last.
 - **Resume:** `--load` pointed at the same directory resumes from the newest copied save. On a fresh start
   there is no tracker, and Miles loads `--ref-load` instead.
-- **Retries:** a retry, or a resubmitted job with the same `--load`, picks up where the last save left off.
+- **Failures:** the jobs set `max_retries: 0`, because a failed attempt would most likely fail the same
+  way. Once the cause is fixed, resubmit the job; with the same `--load` it picks up where the last save
+  left off.
 - **Space:** only the newest save keeps its training state; older saves keep only their HF export.
 
 **MLflow.** `--use-mlflow --mlflow-tracking-uri databricks --mlflow-run-id "$MLFLOW_RUN_ID" --mlflow-run-name <name>`

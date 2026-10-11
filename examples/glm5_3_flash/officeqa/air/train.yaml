@@ -1,5 +1,5 @@
-# Train on eight nodes. Saves are copied to runs/<RUN_ID>/checkpoints; resubmitting the same RUN_ID, or a
-# retry after a failure, resumes from the newest one.
+# Train on eight nodes. Saves are copied to runs/<RUN_ID>/checkpoints, and resubmitting the same RUN_ID
+# resumes from the newest one.
 experiment_name: glm53-flash-officeqa
 compute:
   num_accelerators: 64
@@ -11,8 +11,8 @@ code_source:
   type: snapshot
   snapshot:
     root_path: ../../../..  # relative to this YAML
-max_retries: 2
-timeout_minutes: 2880  # for all attempts together
+max_retries: 0  # a failed attempt would fail the same way; AIR's default is 3
+timeout_minutes: 2880  # including the wait for GPUs
 env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
   RUN_ID: glm53-flash-officeqa

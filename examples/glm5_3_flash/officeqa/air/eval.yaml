@@ -12,7 +12,7 @@ code_source:
   type: snapshot
   snapshot:
     root_path: ../../../..  # relative to this YAML
-max_retries: 1
+max_retries: 0  # a failed attempt would fail the same way; AIR's default is 3
 timeout_minutes: 480
 env_variables:
   VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
