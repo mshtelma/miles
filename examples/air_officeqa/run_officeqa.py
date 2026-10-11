@@ -226,7 +226,7 @@ def _checkpoint_args(args: ScriptArgs) -> list[str]:
             "--save-hf",
             f"{args.output_dir}/checkpoints/iter_{{rollout_id:07d}}/hf",
             "--save-hf-layout-path",
-            "examples.air_officeqa.hf_export.base_layout",
+            "miles.backends.megatron_utils.hf_base_layout.base_layout",
         ]
     return flags
 

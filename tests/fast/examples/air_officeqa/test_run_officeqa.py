@@ -148,7 +148,7 @@ def test_save_hf_exports_inside_each_save_in_the_base_layout(launcher):
     assert hf_path.format(rollout_id=99).endswith("/checkpoints/iter_0000099/hf")
     assert hf_path.startswith(_value(tokens, "--save") + "/")
     assert _value(tokens, "--save-interval") == "25"
-    assert _value(tokens, "--save-hf-layout-path") == "examples.air_officeqa.hf_export.base_layout"
+    assert _value(tokens, "--save-hf-layout-path") == "miles.backends.megatron_utils.hf_base_layout.base_layout"
 
 
 def test_a_persist_dir_is_where_saves_are_copied_and_resumed_from(launcher, tmp_path):

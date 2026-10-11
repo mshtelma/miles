@@ -166,7 +166,6 @@ copied or resumed.
 | --- | --- |
 | `agent.py` | The agent loop: model turns, tool calls, and the final report |
 | `reward.py` | The reward entry point, which scores the report |
-| `hf_export.py` | Writes the HF checkpoint inside each save in the base model's layout |
 | `prepare_data.py` | Downloads OfficeQA and builds the prompt files and the corpus |
 | `corpus.py` | The bulletins, their search passages, and the four retrieval tools |
 | `sandbox.py` | The Python sandbox, run with bubblewrap |

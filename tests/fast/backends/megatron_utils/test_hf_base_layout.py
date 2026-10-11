@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from examples.air_officeqa import hf_export
+from miles.backends.megatron_utils import hf_base_layout as hf_export
 from safetensors.torch import load_file, save_file
 
 _TORCH_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F8_E4M3": torch.float8_e4m3fn}
