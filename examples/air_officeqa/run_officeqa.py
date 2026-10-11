@@ -7,7 +7,7 @@ every other node serves the policy as one 8-GPU SGLang engine:
 
   --model-name      sized for    trainer
   GLM-5.3-Flash     8x 8 B300    four nodes: TP1, CP8, PP4, EP8
-  Qwen3.5-35B-A3B   2x 8 H100    one node: TP2 with sequence parallelism, CP4, EP8
+  Qwen3.5-35B-A3B   3x 8 H100    two nodes: TP2 with sequence parallelism, CP8, EP8
 
 What must exist before ``train``:
   * the HF checkpoint at ``{model_dir}/<model name>`` and its Megatron conversion at
@@ -38,7 +38,7 @@ Examples:
   python examples/air_officeqa/run_officeqa.py prepare
   MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train --num-nodes 8 --save-hf
   MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train \
-    --model-name Qwen3.5-35B-A3B --num-nodes 2
+    --model-name Qwen3.5-35B-A3B --num-nodes 3
 """
 
 import math
@@ -103,14 +103,15 @@ _RECIPES: dict[str, _Recipe] = {
         model_args=("--model-name", "glm5_next", "--qkv-format", "thd"),
         max_concurrent_samples=480,
     ),
-    # One 8-GPU node trains: TP2 with sequence parallelism, CP4, EP8.
+    # Two 8-GPU nodes train: TP2 with sequence parallelism, CP8, EP8. A 150K-token episode is then about 19K tokens
+    # a GPU; on one node, at 38K, the log-probability pass alone overflows an H100.
     "Qwen3.5-35B-A3B": _Recipe(
-        train_gpus=8,
+        train_gpus=16,
         tp=2,
-        cp=4,
+        cp=8,
         pp=1,
         ep=8,
-        default_nodes=2,
+        default_nodes=3,
         # Log-probabilities over the 248K-token vocabulary are taken in chunks; whole, their logits do not fit.
         layout_args=("--sequence-parallel", "--log-probs-chunk-size", "4096"),
         convert_args="",

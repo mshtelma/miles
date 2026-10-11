@@ -51,19 +51,19 @@ def test_officeqa_on_eight_nodes_is_the_default_recipe(launcher):
     assert "--rm-type" not in tokens
 
 
-def test_qwen35_trains_on_one_node_and_serves_from_the_other(launcher):
+def test_qwen35_trains_on_two_nodes_and_serves_from_the_third(launcher):
     call, tokens = _run(launcher, model_name="Qwen3.5-35B-A3B")
 
     assert call["megatron_model_type"] == "qwen3.5-35B-A3B"
     assert _value(tokens, "--hf-checkpoint") == "/root/models/Qwen3.5-35B-A3B"
     assert _value(tokens, "--ref-load") == "/root/ckpt/qwen3.5-35B-A3B_torch_dist"
-    # One node trains with TP2, sequence parallelism, CP4 and EP8; the other serves as one 8-GPU engine.
-    assert _value(tokens, "--actor-num-nodes") == "1"
+    # Two nodes train with TP2, sequence parallelism, CP8 and EP8; the third serves as one 8-GPU engine.
+    assert _value(tokens, "--actor-num-nodes") == "2"
     assert _value(tokens, "--rollout-num-gpus") == "8"
     # As many episodes in flight as the one engine's KV cache holds.
     assert _value(tokens, "--async-max-concurrent-samples") == "64"
     layout = ("--tensor-model-parallel-size", "--context-parallel-size", "--pipeline-model-parallel-size")
-    assert [_value(tokens, flag) for flag in layout] == ["2", "4", "1"]
+    assert [_value(tokens, flag) for flag in layout] == ["2", "8", "1"]
     assert _value(tokens, "--expert-model-parallel-size") == "8"
     assert "--sequence-parallel" in tokens and "--allgather-cp" not in tokens
     # The renderer decides the parsers; GLM's engine and trainer flags stay out.
@@ -189,7 +189,7 @@ def test_without_an_experiment_or_run_there_is_no_mlflow(launcher):
     ("overrides", "match"),
     [
         ({"num_nodes": 4}, "rollout engines"),
-        ({"model_name": "Qwen3.5-35B-A3B", "num_nodes": 1}, "rollout engines"),
+        ({"model_name": "Qwen3.5-35B-A3B", "num_nodes": 2}, "rollout engines"),
         ({"num_gpus_per_node": 4, "num_nodes": 16}, "eight-GPU nodes"),
         ({"save_hf": True, "skip_saving": True}, "inside a save"),
         ({"n_samples_per_prompt": 1}, "two samples"),
@@ -203,7 +203,9 @@ def test_misconfigured_runs_are_rejected(launcher, overrides, match):
 
 def test_token_capacity_rounds_up_to_the_local_quantum(launcher):
     module, _ = launcher
+    # GLM-5.3-Flash's layout and Qwen3.5-35B-A3B's: both about 19K tokens a GPU for a 150K-token episode.
     assert module._max_tokens_per_gpu(150000, tp=1, cp=8) == 19456
+    assert module._max_tokens_per_gpu(150000, tp=2, cp=8) == 19456
     assert module._max_tokens_per_gpu(150000, tp=2, cp=4) == 37888
 
 

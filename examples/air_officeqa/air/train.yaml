@@ -1,5 +1,5 @@
-# Train MODEL_NAME: GLM-5.3-Flash on eight B300 nodes, or Qwen3.5-35B-A3B on two H100 nodes
-# (compute.num_accelerators=16 compute.accelerator_type=GPU_8xH100). Saves are copied to
+# Train MODEL_NAME: GLM-5.3-Flash on eight B300 nodes, or Qwen3.5-35B-A3B on three H100 nodes
+# (compute.num_accelerators=24 compute.accelerator_type=GPU_8xH100). Saves are copied to
 # runs/<RUN_ID>/checkpoints, and resubmitting the same RUN_ID resumes from the newest one.
 experiment_name: air-officeqa
 compute:
