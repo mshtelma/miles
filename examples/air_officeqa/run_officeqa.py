@@ -70,6 +70,9 @@ class _Recipe:
     convert_args: str  # the converter's layout; the trainer reshards the reference on load
     weight_check_skip: tuple[str, ...]  # tensors the initial weight-sync check leaves out
     model_args: tuple[str, ...]
+    # Episodes in flight: what the engines' KV caches hold at once. More only queue, and a queued session loses
+    # its cached prefix, so every later turn prefills its whole context again.
+    max_concurrent_samples: int
 
 
 _RECIPES: dict[str, _Recipe] = {
@@ -98,6 +101,7 @@ _RECIPES: dict[str, _Recipe] = {
         # still checked exactly, which catches real mapping bugs.
         weight_check_skip=("visual.", "mlp.experts."),
         model_args=("--model-name", "glm5_next", "--qkv-format", "thd"),
+        max_concurrent_samples=480,
     ),
     # One 8-GPU node trains: TP2 with sequence parallelism, CP4, EP8.
     "Qwen3.5-35B-A3B": _Recipe(
@@ -113,6 +117,8 @@ _RECIPES: dict[str, _Recipe] = {
         weight_check_skip=("visual.",),
         # Megatron's own FlashAttention-2 path, as scripts/run_qwen3_5_35b_a3b_mtp.py uses off Blackwell.
         model_args=("--attention-backend", "flash"),
+        # One H100 engine holds about 68 OfficeQA sessions (2.4M tokens of KV cache): a step's 64 episodes.
+        max_concurrent_samples=64,
     ),
 }
 
@@ -149,7 +155,8 @@ class ScriptArgs(U.ExecuteTrainConfig):
     n_samples_per_prompt: int = 8
     rollout_temperature: float = 1.0
     max_weight_staleness: int = 16
-    async_max_concurrent_samples: int = 480
+    # None: the recipe's.
+    async_max_concurrent_samples: int | None = None
     async_max_prompt_attempts: int = 3
     async_retry_backoff_s: float = 2.0
     async_no_progress_timeout_s: float = 3000.0
@@ -182,6 +189,8 @@ class ScriptArgs(U.ExecuteTrainConfig):
             self.hf_checkpoint = f"{self.model_dir}/{self.model_name}"
         if self.prompt_data is None:
             self.prompt_data = f"{self.data_dir}/officeqa/train.jsonl"
+        if self.async_max_concurrent_samples is None:
+            self.async_max_concurrent_samples = self.recipe.max_concurrent_samples
         self._validate()
 
     def _validate(self) -> None:

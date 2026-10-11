@@ -60,6 +60,8 @@ def test_qwen35_trains_on_one_node_and_serves_from_the_other(launcher):
     # One node trains with TP2, sequence parallelism, CP4 and EP8; the other serves as one 8-GPU engine.
     assert _value(tokens, "--actor-num-nodes") == "1"
     assert _value(tokens, "--rollout-num-gpus") == "8"
+    # As many episodes in flight as the one engine's KV cache holds.
+    assert _value(tokens, "--async-max-concurrent-samples") == "64"
     layout = ("--tensor-model-parallel-size", "--context-parallel-size", "--pipeline-model-parallel-size")
     assert [_value(tokens, flag) for flag in layout] == ["2", "4", "1"]
     assert _value(tokens, "--expert-model-parallel-size") == "8"
