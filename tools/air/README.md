@@ -1,7 +1,7 @@
 # Miles on Databricks AI Runtime
 
 Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory holds the two helpers Miles
-uses there, and this page describes how any Miles launcher maps onto AIR. The
+uses there and a training job for any Miles launcher, and this page describes how Miles maps onto AIR. The
 [GLM-5.3-Flash example](../../examples/glm5_3_flash/README.md) is a complete flow built from these pieces:
 prepare, train and evaluate.
 
@@ -64,25 +64,31 @@ does three things:
 - makes the publisher tag the run with each save's path (`miles.save.<step>`), and map each save to its run
   in `mlflow_runs.json` next to the tracker.
 
-## Running another launcher on AIR
+## Running a launcher on AIR
 
-[`examples/glm5_3_flash/officeqa/air/train.yaml`](../../examples/glm5_3_flash/officeqa/air/train.yaml) is
-the template. A launcher built on `ExecuteTrainConfig`, such as `scripts/run_qwen3_30b_a3b.py`, takes the
-same AIR wiring through its generic options:
+[`train.yaml`](./train.yaml) runs any launcher built on `ExecuteTrainConfig`, such as
+`scripts/run_qwen3_4b.py`, with all of the above. Set its variables with `--override env_variables.NAME=...`:
+- `LAUNCHER`: the script;
+- `LAUNCHER_ARGS`: the launcher's own flags, such as `--mode debug_minimal`;
+- `EXTRA_ARGS`: Miles flags, which come after the launcher's, such as `--num-rollout 4`;
+- `INPUTS`: directories under `VOLUME_ROOT` that every node copies to `/tmp/miles-air` before training.
 
 ```bash
-LOCAL=/tmp/miles-air RUN="$VOLUME_ROOT/runs/$RUN_ID"
-# ...copy the inputs to $LOCAL and start Ray as in train.yaml, then on the head node:
-MILES_SCRIPT_EXTERNAL_RAY=1 python scripts/run_qwen3_30b_a3b.py --num-nodes "$NUM_NODES" \
-  --output-dir "$LOCAL/run" --model-dir "$LOCAL/models" --data-dir "$LOCAL/data" \
-  --extra-env-vars "MILES_PERSIST_DIR=$RUN/checkpoints" \
-  --extra-args "--load $RUN/checkpoints --checkpoint-publisher-path tools.air.publisher.VolumePublisher \
-    --use-mlflow --mlflow-tracking-uri databricks --mlflow-run-id $MLFLOW_RUN_ID --mlflow-run-name $RUN_ID"
+air -p <profile> run tools/air/train.yaml --override \
+  environment.docker_image.url=<registry>/miles-air@sha256:<digest> \
+  env_variables.VOLUME_ROOT=/Volumes/<catalog>/<schema>/<volume>/miles env_variables.RUN_ID=qwen3-4b-check \
+  "env_variables.LAUNCHER_ARGS=--mode debug_minimal --model-dir /tmp/miles-air/models --data-dir /tmp/miles-air/data" \
+  "env_variables.EXTRA_ARGS=--num-rollout 4 --sglang-attention-backend flashinfer"
 ```
 
-`--output-dir` keeps the launcher's saves on local disk, and the later `--load` in `--extra-args` replaces
-the launcher's own. Only `scripts/run_glm5_3_flash.py` has run this way on AIR so far; its `--persist-dir`
-and `--mlflow-run-id` options set the same flags.
+The job passes the launcher two sets of flags:
+- `--output-dir /tmp/miles-air/run`, which keeps the launcher's saves on local disk;
+- `--extra-args` with `--load` set to `runs/<RUN_ID>/checkpoints`, the publisher, and the MLflow flags. Miles
+  keeps the last `--load` it is given, so this one replaces the launcher's own.
+
+The Qwen3 launchers download their model and data on the head node only, so they run on one node. For more
+nodes, put the inputs on the Volume and list them in `INPUTS`. `scripts/run_glm5_3_flash.py` sets the same
+flags through its `--persist-dir` and `--mlflow-run-id` options.
 
 ## Things to know
 
@@ -92,6 +98,8 @@ and `--mlflow-run-id` options set the same flags.
   saves and copies under that.
 * **Images.** They must be `linux/amd64` and under 20 GB. AIR ignores `WORKDIR`, so the command uses
   absolute paths or `cd "$CODE_SOURCE_PATH"`.
+* **H100.** The image's kernels cover Hopper as well as Blackwell, except FlashAttention 3, which SGLang
+  chooses by default on Hopper. On H100 nodes, add `--sglang-attention-backend flashinfer` to the Miles flags.
 * **Identity.** Jobs act as the submitting user. `permissions` shares a run with others, and
   `usage_policy_name` bills it to a serverless usage policy.
 * **The Databricks CLI.** Version 1.19 has the same commands as `databricks air`. It takes images from Unity
