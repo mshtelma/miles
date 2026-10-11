@@ -407,8 +407,7 @@ def _sglang_args(args: ScriptArgs) -> list[str]:
         str(args.sglang_mem_fraction_static),
         "--sglang-kv-cache-dtype",
         "bfloat16",
-        # Miles takes an SGLang server flag with the --sglang- prefix.
-        *(f"--sglang-{arg.removeprefix('--')}" if arg.startswith("--") else arg for arg in model.engine_args),
+        *model.sglang_args,
         "--router-health-success-threshold",
         "1",
         "--router-health-check-interval-secs",

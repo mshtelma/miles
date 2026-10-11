@@ -19,7 +19,7 @@ class Model:
     megatron_model_type: str  # scripts/models/<type>.py
     tito_model: str  # the session server's renderer (--tito-model)
     engine_gpus: int  # GPUs per SGLang engine, its tensor- and expert-parallel size
-    engine_args: tuple[str, ...]  # the model's own SGLang server flags
+    sglang_args: tuple[str, ...]  # the model's own engine flags, as Miles takes them
 
     @property
     def torch_dist(self) -> str:
@@ -39,12 +39,12 @@ MODELS: dict[str, Model] = {
             engine_gpus=8,
             # Its sparse attention (DSA) runs on TileLang. Routing replay (R3) needs a MoE backend that reports
             # the experts it routed to.
-            engine_args=(
-                "--dsa-prefill-backend",
+            sglang_args=(
+                "--sglang-dsa-prefill-backend",
                 "tilelang",
-                "--dsa-decode-backend",
+                "--sglang-dsa-decode-backend",
                 "tilelang",
-                "--moe-runner-backend",
+                "--sglang-moe-runner-backend",
                 "triton",
             ),
         ),
@@ -56,7 +56,7 @@ MODELS: dict[str, Model] = {
             tito_model="qwen35",
             engine_gpus=8,
             # FlashAttention 3, SGLang's default on Hopper, is not in the AIR image.
-            engine_args=("--attention-backend", "flashinfer", "--moe-runner-backend", "triton"),
+            sglang_args=("--sglang-attention-backend", "flashinfer", "--sglang-moe-runner-backend", "triton"),
         ),
     )
 }

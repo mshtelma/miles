@@ -74,7 +74,8 @@ def server_argv(model: Model, model_path: Path, *, host: str, port: int, seed: i
         reasoning_parser,
         "--tool-call-parser",
         tool_call_parser,
-        *model.engine_args,
+        # SGLang's own name for each of Miles' engine flags: without its sglang- prefix.
+        *(arg.replace("sglang-", "", 1) if arg.startswith("--") else arg for arg in model.sglang_args),
         "--lora-use-virtual-experts",
         *(["--chat-template", template] if template else []),
         "--default-chat-template-kwargs",
