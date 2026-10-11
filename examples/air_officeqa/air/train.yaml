@@ -37,7 +37,7 @@ command: |
     --disable-usage-stats --dashboard-host=127.0.0.1
   eval "set -- $TRAIN_ARGS"
   set +e
-  MILES_SCRIPT_EXTERNAL_RAY=1 python scripts/run_air_officeqa.py train --model-name "$MODEL_NAME" --run-id "$RUN_ID" \
+  MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train --model-name "$MODEL_NAME" --run-id "$RUN_ID" \
     --num-nodes "$NUM_NODES" --output-dir "$LOCAL/run" --model-dir "$LOCAL/models" --data-dir "$LOCAL/data" \
     --ckpt-dir "$VOLUME_ROOT/ckpt" --persist-dir "$RUN/checkpoints" --mlflow-run-id "$MLFLOW_RUN_ID" "$@"
   code=$?

@@ -1,6 +1,6 @@
 """The models the OfficeQA recipe trains: their checkpoints, and how one SGLang engine serves each.
 
-``scripts/run_air_officeqa.py`` adds how to train each model, and ``eval/server.py`` serves a checkpoint the way
+``run_officeqa.py`` adds how to train each model, and ``eval/server.py`` serves a checkpoint the way
 the rollout engines do. The chat template and the SGLang parsers follow from the renderer
 (``miles.utils.chat_template_utils.resolve_fixed_chat_template`` and ``resolve_reasoning_and_tool_call_parser``).
 """

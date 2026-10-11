@@ -1,6 +1,6 @@
 """The OfficeQA agent's tools, scorer and limits, shared by training and the standalone eval.
 
-scripts/run_air_officeqa.py passes ``agent_env`` to the Ray workers and eval/entry.py sets it for its
+examples/air_officeqa/run_officeqa.py passes ``agent_env`` to the Ray workers and eval/entry.py sets it for its
 own process, so an eval episode runs exactly like a training one.
 """
 

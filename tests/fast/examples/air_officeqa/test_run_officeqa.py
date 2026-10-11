@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 @pytest.fixture
 def launcher(monkeypatch):
-    module = import_launch_script(REPO_ROOT / "scripts/run_air_officeqa.py")
+    module = import_launch_script(REPO_ROOT / "examples/air_officeqa/run_officeqa.py")
     for key in ("SLURM_JOB_NUM_NODES", "DATABRICKS_HOST", "DATABRICKS_TOKEN", "MLFLOW_RUN_ID", "MILES_ATTEMPT_ID"):
         monkeypatch.delenv(key, raising=False)
     calls = []

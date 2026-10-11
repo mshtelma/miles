@@ -35,9 +35,10 @@ Args:
     takes the run id as its name.
 
 Examples:
-  python scripts/run_air_officeqa.py prepare
-  MILES_SCRIPT_EXTERNAL_RAY=1 python scripts/run_air_officeqa.py train --num-nodes 8 --save-hf
-  MILES_SCRIPT_EXTERNAL_RAY=1 python scripts/run_air_officeqa.py train --model-name Qwen3.5-35B-A3B --num-nodes 2
+  python examples/air_officeqa/run_officeqa.py prepare
+  MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train --num-nodes 8 --save-hf
+  MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train \
+    --model-name Qwen3.5-35B-A3B --num-nodes 2
 """
 
 import math
@@ -89,7 +90,8 @@ _RECIPES: dict[str, _Recipe] = {
         ),
         convert_args=(
             "--tensor-model-parallel-size 1 --pipeline-model-parallel-size 4 --expert-model-parallel-size 2 "
-            "--expert-tensor-parallel-size 1 --decoder-first-pipeline-num-layers 11 --decoder-last-pipeline-num-layers 12"
+            "--expert-tensor-parallel-size 1 --decoder-first-pipeline-num-layers 11 "
+            "--decoder-last-pipeline-num-layers 12"
         ),
         # The FP8 routed experts (the only FP8 tensors): the trainer loads the BF16 reference and re-quantizes on
         # export, so on the initial sync they differ from the engine's HF FP8 by about one ULP. BF16 tensors are

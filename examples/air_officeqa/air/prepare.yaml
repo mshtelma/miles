@@ -28,7 +28,7 @@ command: |
   export HF_HUB_DISABLE_XET=1
   LOCAL=/tmp/miles-air
   python -m examples.air_officeqa.prepare_data --out-dir "$LOCAL/data/officeqa"
-  python scripts/run_air_officeqa.py prepare --model-name "$MODEL_NAME" --model-dir "$LOCAL/models" \
+  python examples/air_officeqa/run_officeqa.py prepare --model-name "$MODEL_NAME" --model-dir "$LOCAL/models" \
     --ckpt-dir "$LOCAL/ckpt" --data-dir "$LOCAL/data"
   python -m tools.air.copy_tree "$LOCAL/data/officeqa" "$VOLUME_ROOT/data/officeqa"
   python -m tools.air.copy_tree "$LOCAL/models/$MODEL_NAME" "$VOLUME_ROOT/models/$MODEL_NAME"

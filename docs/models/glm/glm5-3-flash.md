@@ -24,7 +24,7 @@ GLM5.2 flagships, not a smaller cut of them.
 
 ## 2. Layout
 
-`scripts/run_air_officeqa.py` trains on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12
+`examples/air_officeqa/run_officeqa.py` trains on eight 8-GPU nodes: four train with TP1 CP8 PP4 (11/11/11/12
 layers) EP8, and the others serve the policy as 8-GPU SGLang engines, fully async. More nodes add
 engines.
 
@@ -41,7 +41,7 @@ The recipe runs on the Databricks AI Runtime image built from `docker/air/Docker
 Download and convert the checkpoint (`--ref-load` resolves to `<--ckpt-dir>/glm5.3-flash_torch_dist`):
 
 ```bash
-python scripts/run_air_officeqa.py prepare                      # 1 node
+python examples/air_officeqa/run_officeqa.py prepare                      # 1 node
 ```
 
 Build the OfficeQA prompt files and corpus. The script downloads the gated `databricks/officeqa` dataset
@@ -60,7 +60,7 @@ hard questions in `eval_heldout.jsonl`.
 On an 8-node Ray cluster (`MILES_SCRIPT_EXTERNAL_RAY=1`), from the head node:
 
 ```bash
-python scripts/run_air_officeqa.py train --save-hf
+python examples/air_officeqa/run_officeqa.py train --save-hf
 ```
 
 The defaults are the recipe:

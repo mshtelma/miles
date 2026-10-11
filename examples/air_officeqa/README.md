@@ -74,7 +74,7 @@ air -p <profile> run $AIR/prepare.yaml --override "${COMMON[@]}" secrets.HF_TOKE
 [`prepare_data.py`](./prepare_data.py) downloads OfficeQA at a pinned revision: the
 questions, and the bulletins as text. It puts all 113 easy questions and 90 of the 133 hard ones in
 `train.jsonl`, and holds out the other 43 hard ones in `eval_heldout.jsonl`. It also cuts the bulletins into
-the passages the agent's search ranks. Then `scripts/run_air_officeqa.py prepare` downloads the pinned
+the passages the agent's search ranks. Then `examples/air_officeqa/run_officeqa.py prepare` downloads the pinned
 GLM-5.3-Flash revision and converts it to Megatron's `torch_dist` format.
 
 ## 2. Train
@@ -84,7 +84,7 @@ air -p <profile> run $AIR/train.yaml --override "${COMMON[@]}" env_variables.RUN
 ```
 
 The defaults train 100 steps of 8 prompts x 8 samples and save every 10 steps, which takes about ten hours.
-`TRAIN_ARGS` passes flags to `scripts/run_air_officeqa.py train` (see its docstring) and replaces the default,
+`TRAIN_ARGS` passes flags to `examples/air_officeqa/run_officeqa.py train` (see its docstring) and replaces the default,
 `--save-hf`. For a short check:
 
 ```bash
@@ -149,11 +149,11 @@ When you no longer need a run, delete it: `databricks fs rm -r dbfs:<VOLUME_ROOT
 On eight 8-GPU nodes with the image's software stack:
 
 ```bash
-python scripts/run_air_officeqa.py prepare                                    # one node
+python examples/air_officeqa/run_officeqa.py prepare                                    # one node
 HF_TOKEN=<token> python -m examples.air_officeqa.prepare_data --out-dir /root/datasets/officeqa
 # start Ray on all eight nodes, then on the head node:
 DATABRICKS_HOST=<workspace-url> DATABRICKS_TOKEN=<token> MILES_SCRIPT_EXTERNAL_RAY=1 \
-  python scripts/run_air_officeqa.py train --num-nodes 8 --save-hf
+  python examples/air_officeqa/run_officeqa.py train --num-nodes 8 --save-hf
 ```
 
 The judge still calls the workspace's serving endpoints, so the workers need `DATABRICKS_HOST` and

@@ -14,7 +14,7 @@ from examples.air_officeqa.models import Model
 
 SERVED_MODEL_NAME = "officeqa-eval"
 DEFAULT_PORT = 30000
-# What the recipe exports to its engines (scripts/run_air_officeqa.py, _env_vars).
+# What the recipe exports to its engines (examples/air_officeqa/run_officeqa.py, _env_vars).
 SERVER_ENV = {
     "SGLANG_HEALTH_CHECK_TIMEOUT": "120",
     "SGLANG_RETURN_ORIGINAL_LOGPROB": "0",

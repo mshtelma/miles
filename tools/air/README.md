@@ -89,7 +89,7 @@ The job passes the launcher two sets of flags:
   keeps the last `--load` it is given, so this one replaces the launcher's own.
 
 The Qwen3 launchers download their model and data on the head node only, so they run on one node. For more
-nodes, put the inputs on the Volume and list them in `INPUTS`. `scripts/run_air_officeqa.py` sets the same
+nodes, put the inputs on the Volume and list them in `INPUTS`. `examples/air_officeqa/run_officeqa.py` sets the same
 flags through its `--persist-dir` and `--mlflow-run-id` options.
 
 ## Things to know
