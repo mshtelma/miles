@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
@@ -7,6 +8,7 @@ import pytest
 from tests.fast.fixtures.session_fixtures import make_session_server_config
 
 from miles.rollout.session import server as session_server_module
+from miles.rollout.session.core import ProxyRequest
 from miles.rollout.session.server import SessionServer, main
 from miles.utils.workers.argv_utils import config_to_argv
 
@@ -17,6 +19,54 @@ class TestSessionServer:
         server = SessionServer(make_session_server_config(timeout=7.5))
 
         assert server.client.timeout == httpx.Timeout(7.5)
+
+
+class TestDoProxy:
+    @staticmethod
+    def _server(monkeypatch, outcomes: list) -> tuple[SessionServer, list[httpx.Request]]:
+        """A session server whose backend answers each request with the next outcome, raising exceptions."""
+        sent = []
+
+        def backend(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            outcome = outcomes[len(sent) - 1]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(session_server_module, "_RESEND_DELAYS_S", (0.0, 0.0))
+        server = SessionServer(make_session_server_config())
+        server.client = httpx.AsyncClient(transport=httpx.MockTransport(backend))
+        return server, sent
+
+    @staticmethod
+    async def _proxy(server: SessionServer) -> dict:
+        return await server.do_proxy(ProxyRequest(method="POST"), "v1/chat/completions", body=b"{}", headers={})
+
+    async def test_a_dropped_connection_is_resent(self, monkeypatch):
+        server, sent = self._server(monkeypatch, [httpx.ReadError(""), httpx.Response(200, json={"id": "x"})])
+
+        result = await self._proxy(server)
+
+        assert result["status_code"] == 200
+        assert [request.content for request in sent] == [b"{}", b"{}"]
+
+    async def test_a_read_timeout_is_not_resent(self, monkeypatch):
+        server, sent = self._server(monkeypatch, [httpx.ReadTimeout("slow")])
+
+        result = await self._proxy(server)
+
+        assert result["status_code"] == 502
+        assert len(sent) == 1
+
+    async def test_a_backend_that_drops_every_resend_is_a_502(self, monkeypatch):
+        server, sent = self._server(monkeypatch, [httpx.ReadError("")] * 3)
+
+        result = await self._proxy(server)
+
+        assert result["status_code"] == 502
+        assert json.loads(result["response_body"]) == {"error": "backend transport error: ReadError: "}
+        assert len(sent) == 3
 
 
 def test_run_session_server_suppresses_routine_request_logs(monkeypatch):

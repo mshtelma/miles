@@ -1,11 +1,12 @@
 """Standalone session-server process: HTTP chassis + upstream proxy transport.
 
-- ``SessionServer`` is a FastAPI app plus one shared httpx client; ``do_proxy`` forwards a request to the inference router (sglang or miles) — which does the load balancing to worker engines — and returns the raw result, or a 502 JSON error on transport failure.
+- ``SessionServer`` is a FastAPI app plus one shared httpx client; ``do_proxy`` forwards a request to the inference router (sglang or miles) — which does the load balancing to worker engines — resends it if the connection drops, and returns the raw result, or a 502 JSON error on transport failure.
 - Session/TITO logic lives in ``core.SessionCore``; ``setup_session_routes`` (``sessions.py``) wires the HTTP routes to it.
 - Standalone (own process, own event loop) so sessions also work with the SGLang Rust Router or any other backend, decoupled from the Miles Router.
 - ``run_session_server`` is the subprocess entry point: fresh interpreter, so it configures logging and the process title itself, then serves uvicorn.
 """
 
+import asyncio
 import json
 import logging
 
@@ -29,6 +30,11 @@ _DROP_REQUEST_HEADERS = ("content-length", "transfer-encoding", "host")
 # after 5 s). With uvicorn's own 5 s default, an agent that starts its next turn about 5 s
 # after the last one reuses a socket the server is closing and fails with httpx.ReadError.
 _KEEP_ALIVE_S = 75
+
+# Resend a request whose backend connection drops. The SGLang router has been seen to reset a
+# burst of connections as the first rollout starts while it went on serving new ones. A read
+# timeout is final, since the backend may still be generating.
+_RESEND_DELAYS_S = (1.0, 5.0)
 
 
 class SessionServer:
@@ -60,7 +66,7 @@ class SessionServer:
         headers = {k: v for k, v in headers.items() if k.lower() not in _DROP_REQUEST_HEADERS}
 
         try:
-            response = await self.client.request(request.method, url, content=body, headers=headers)
+            response = await self._send(request.method, url, body=body, headers=headers)
         except httpx.TransportError as exc:
             logger.warning("Proxy transport error for %s %s: %s", request.method, path, exc)
             error_body = json.dumps({"error": f"backend transport error: {type(exc).__name__}: {exc}"}).encode()
@@ -77,6 +83,17 @@ class SessionServer:
             "status_code": response.status_code,
             "headers": dict(response.headers),
         }
+
+    async def _send(self, method: str, url: str, *, body: bytes, headers: dict) -> httpx.Response:
+        for delay in _RESEND_DELAYS_S:
+            try:
+                return await self.client.request(method, url, content=body, headers=headers)
+            except httpx.ReadTimeout:
+                raise
+            except httpx.TransportError as exc:
+                logger.warning("Backend connection failed for %s %s (%r); resending in %s s", method, url, exc, delay)
+                await asyncio.sleep(delay)
+        return await self.client.request(method, url, content=body, headers=headers)
 
 
 def run_session_server(config: SessionServerConfig):
