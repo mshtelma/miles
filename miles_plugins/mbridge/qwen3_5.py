@@ -10,12 +10,13 @@ from miles.backends.megatron_utils.megatron_to_hf.gdn_layout import (
     qkv_flat_to_group_major,
     qkv_group_major_to_flat,
 )
+from miles_plugins.mbridge.linear_attn_layout import SkipLinearAttnLayoutMarker
 
 _GDN_GROUP_MAJOR = ("self_attention.linear_attn.in_proj_qkv.weight", "self_attention.linear_attn.conv1d.weight")
 
 
 @register_model(["qwen3_5", "qwen3_5_moe", "qwen3_6", "qwen3_6_moe"])
-class Qwen3_5Bridge(Qwen2MoEBridge):
+class Qwen3_5Bridge(SkipLinearAttnLayoutMarker, Qwen2MoEBridge):
     """
     Bridge for Qwen3.5 / Qwen3.6 models (both dense and MoE variants).
     These share the ``qwen3_5_moe`` HF config schema: VLM layout under

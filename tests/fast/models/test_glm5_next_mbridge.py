@@ -8,6 +8,16 @@ from unittest.mock import patch
 
 import torch
 
+_MBRIDGE = Path(__file__).resolve().parents[3] / "miles_plugins/mbridge"
+
+
+def _load(name: str) -> ModuleType:
+    """A dependency-free module of miles_plugins/mbridge, loaded without the package's bridge imports."""
+    spec = importlib.util.spec_from_file_location(f"test_glm5_next_mbridge_{name}", _MBRIDGE / name)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def _bridge_module():
     class BridgeBase:
@@ -41,6 +51,7 @@ def _bridge_module():
         "mbridge.models.ext.deepseek_v3.kernel": kernel_module,
         "miles_plugins.mbridge": ModuleType("miles_plugins.mbridge"),
         "miles_plugins.mbridge.deepseek_v32": deepseek_bridge,
+        "miles_plugins.mbridge.linear_attn_layout": _load("linear_attn_layout.py"),
     }
     path = Path(__file__).resolve().parents[3] / "miles_plugins/mbridge/glm5_next.py"
     spec = importlib.util.spec_from_file_location("test_glm5_next_mbridge_target", path)
