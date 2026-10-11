@@ -102,6 +102,8 @@ flags through its `--persist-dir` and `--mlflow-run-id` options.
   absolute paths or `cd "$CODE_SOURCE_PATH"`.
 * **H100.** The image's kernels cover Hopper as well as Blackwell, except FlashAttention 3, which SGLang
   chooses by default on Hopper. On H100 nodes, add `--sglang-attention-backend flashinfer` to the Miles flags.
+  To resume a run whose engines share the GPUs with the trainer (`--colocate`), also add
+  `--sglang-mem-fraction-static 0.5`: the trainer loads its optimizer state while the engines hold their memory.
 * **Identity.** Jobs act as the submitting user. `permissions` shares a run with others, and
   `usage_policy_name` bills it to a serverless usage policy.
 * **The Databricks CLI.** Version 1.19 has the same commands as `databricks air`. It takes images from Unity
