@@ -112,8 +112,16 @@ _RECIPES: dict[str, _Recipe] = {
         pp=1,
         ep=8,
         default_nodes=3,
-        # Log-probabilities over the 248K-token vocabulary are taken in chunks; whole, their logits do not fit.
-        layout_args=("--sequence-parallel", "--log-probs-chunk-size", "4096"),
+        # Log-probabilities over the 248K-token vocabulary are taken in chunks; whole, their logits do not fit. With
+        # PyTorch's default allocator, a 150K-token step left a quarter of each H100 cached in fragments and NCCL found
+        # no room in the backward; the trainer is never colocated, so expandable segments are safe.
+        layout_args=(
+            "--sequence-parallel",
+            "--log-probs-chunk-size",
+            "4096",
+            "--train-env-vars",
+            '{"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}',
+        ),
         convert_args="",
         weight_check_skip=("visual.",),
         # Megatron's own FlashAttention-2 path, as scripts/run_qwen3_5_35b_a3b_mtp.py uses off Blackwell. The model

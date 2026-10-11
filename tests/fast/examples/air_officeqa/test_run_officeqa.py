@@ -73,6 +73,7 @@ def test_qwen35_trains_on_two_nodes_and_serves_from_the_third(launcher):
     assert _value(tokens, "--sglang-attention-backend") == "flashinfer"
     assert "--sglang-dsa-prefill-backend" not in tokens and "--model-name" not in tokens
     assert tokens[tokens.index("--check-weight-update-skip-list") + 1 : tokens.index("--save")] == ["visual."]
+    assert json.loads(_value(tokens, "--train-env-vars")) == {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
     # The model definition's MTP block is turned off: its full-vocabulary loss does not fit at 150K tokens.
     assert _value(tokens, "--mtp-num-layers") == "0" and "--enable-mtp-training" not in tokens
 
