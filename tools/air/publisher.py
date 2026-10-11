@@ -6,9 +6,13 @@ local disk. Once the trainer and the rollout state are saved, one task per node 
 the save into DIR and deletes it locally. Megatron's tracker, ``latest_checkpointed_iteration.txt``, is
 written last, so ``--load DIR`` resumes only from a save that was copied whole. The older saves then lose
 their training state, about 4.4 TB each, and keep only their HF export.
+
+When the run logs to MLflow, ``mlflow_runs.json`` in DIR maps each save to the MLflow run that made it,
+which an eval of the save logs into, and that run gets a ``miles.save.<step>`` tag with the save's path.
 """
 
 import asyncio
+import json
 import os
 import shutil
 from pathlib import Path
@@ -18,6 +22,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from tools.air.copy_tree import copy_tree
 
 TRACKER = "latest_checkpointed_iteration.txt"
+MLFLOW_RUNS = "mlflow_runs.json"
 
 
 def copy_node_save(local: Path, remote: Path, rollout_id: int) -> None:
@@ -46,8 +51,21 @@ def prune_older_saves(remote: Path, rollout_id: int) -> None:
                     path.unlink()
 
 
+def record_mlflow_run(remote: Path, rollout_id: int, run_id: str) -> None:
+    """Map the save to its MLflow run, and tag the run with the save's path."""
+    # Imported here: MLflow is needed only by runs that log to it.
+    from mlflow.tracking import MlflowClient
+
+    runs_file = remote / MLFLOW_RUNS
+    runs = json.loads(runs_file.read_text()) if runs_file.is_file() else {}
+    runs_file.write_text(json.dumps({**runs, str(rollout_id): run_id}, indent=1, sort_keys=True))
+    MlflowClient().set_tag(run_id, f"miles.save.{rollout_id}", str(remote / f"iter_{rollout_id:07d}"))
+
+
 class VolumePublisher:
     def __init__(self, args):
+        # Miles sets args.mlflow_run_id when tracking starts, after the publisher is made.
+        self.args = args
         self.local, self.remote = Path(args.save), Path(os.environ["MILES_PERSIST_DIR"])
 
     async def after_save(self, rollout_id: int) -> None:
@@ -63,4 +81,9 @@ class VolumePublisher:
         )
         await asyncio.to_thread((self.remote / TRACKER).write_text, str(rollout_id))
         print(f"checkpoint {rollout_id} copied to {self.remote}", flush=True)
+        if getattr(self.args, "mlflow_run_id", None) is not None:
+            try:
+                await asyncio.to_thread(record_mlflow_run, self.remote, rollout_id, self.args.mlflow_run_id)
+            except Exception as error:  # bookkeeping: a failed MLflow call must not stop the training run
+                print(f"could not record checkpoint {rollout_id} in MLflow: {error!r}", flush=True)
         await asyncio.to_thread(prune_older_saves, self.remote, rollout_id)

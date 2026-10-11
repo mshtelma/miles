@@ -19,6 +19,9 @@ from tools.air.copy_tree import copy_tree
 
 logger = logging.getLogger(__name__)
 
+# Written next to the tracker by tools/air/publisher.py, which this module does not import: it needs Ray.
+MLFLOW_RUNS = "mlflow_runs.json"
+
 
 def _parse(argv):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -49,7 +52,14 @@ def model_source(volume_root: Path, hf_source: str) -> tuple[Path, dict]:
     copied = int((save.parent / "latest_checkpointed_iteration.txt").read_text())
     if copied < step or not (save / "hf/.complete").is_file():
         raise ValueError(f"{save} is not a fully copied save with a complete HF export")
-    return save / "hf", {"kind": "checkpoint", "path": str(save), "rollout_id": step}
+    runs_file = save.parent / MLFLOW_RUNS
+    training_run = json.loads(runs_file.read_text()).get(str(step)) if runs_file.is_file() else None
+    return save / "hf", {
+        "kind": "checkpoint",
+        "path": str(save),
+        "rollout_id": step,
+        **({"mlflow_run_id": training_run} if training_run else {}),
+    }
 
 
 def _eval_sets(values: list[str], input_root: Path) -> dict[str, Path]:
@@ -118,14 +128,27 @@ async def _evaluate(args, url: str, model_path: Path, process):
         await runner.cleanup()
 
 
-def _log_mlflow(args, metrics, model, step):
+def _log_mlflow(args, metrics, model, step, *, valid):
+    """Log into the eval's own run and, for a valid eval of a save, into the training run at the save's
+    step, where the held-out scores sit next to the training curves."""
     try:
         import mlflow
+        from mlflow.entities import Metric
+        from mlflow.tracking import MlflowClient
 
         mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
         with mlflow.start_run(run_id=args.attempt_id):
+            mlflow.set_tag("mlflow.runName", args.run_id)
             mlflow.log_params({"hf_source": args.hf_source, "model": json.dumps(model, sort_keys=True)[:500]})
             mlflow.log_metrics({key: float(value) for key, value in metrics.items()}, step=step)
+        if valid and "mlflow_run_id" in model:
+            now = int(time.time() * 1000)
+            scores = [
+                Metric(key, float(value), now, step)
+                for key, value in metrics.items()
+                if not key.startswith("officeqa_eval/harness/")
+            ]
+            MlflowClient().log_batch(model["mlflow_run_id"], metrics=scores)
     except Exception:
         logger.exception("MLflow logging failed; eval results are on the Volume")
 
@@ -165,7 +188,7 @@ def main(argv=None) -> int:
     )
     summary = {"valid": valid, "metrics": metrics, "model": model}
     driver.write_outputs(args.out_dir, model=model, summary=summary, outcomes=outcomes)
-    _log_mlflow(args, metrics, model, model.get("rollout_id") or 0)
+    _log_mlflow(args, metrics, model, model.get("rollout_id") or 0, valid=valid)
     print("OfficeQA eval: " + json.dumps({"valid": valid, "lost_fraction": lost, "model": model}), flush=True)
     return 0 if valid else 1
 

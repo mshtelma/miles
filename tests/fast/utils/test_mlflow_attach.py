@@ -56,6 +56,8 @@ def test_primary_attaches_in_the_explicit_runs_experiment(monkeypatch):
     assert fake.experiments == ["existing-experiment"]
     assert fake.started[0][0] == "existing-run"
     assert fake.started[0][1]["miles.requested_experiment"] == "/Users/example/glm53"
+    # The existing run gets the requested name, which start_run alone would not set.
+    assert fake.started[0][1]["mlflow.runName"] == "run"
     assert args.mlflow_run_id == "existing-run"
 
     mlflow_utils.init_mlflow(args, primary=False)
@@ -71,3 +73,4 @@ def test_primary_without_explicit_run_uses_requested_experiment(monkeypatch):
     mlflow_utils.init_mlflow(args, primary=True)
     assert fake.experiments == ["/Users/example/glm53"]
     assert fake.started[0][0] is None and "miles.requested_experiment" not in fake.started[0][1]
+    assert "mlflow.runName" not in fake.started[0][1]

@@ -127,6 +127,21 @@ def test_a_persist_dir_is_where_saves_are_copied_and_resumed_from(launcher, tmp_
     assert "--check-weight-update-equal" in fresh and "--check-weight-update-equal" not in resumed
 
 
+def test_an_existing_mlflow_run_is_enough_to_log_to_mlflow(launcher):
+    _, tokens = _run(launcher, mlflow_run_id="air-run")
+
+    assert "--use-mlflow" in tokens
+    assert _value(tokens, "--mlflow-run-id") == "air-run"
+    assert _value(tokens, "--mlflow-run-name") == "test-run"
+    assert "--mlflow-experiment-name" not in tokens
+
+
+def test_without_an_experiment_or_run_there_is_no_mlflow(launcher):
+    _, tokens = _run(launcher)
+
+    assert "--use-mlflow" not in tokens
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [

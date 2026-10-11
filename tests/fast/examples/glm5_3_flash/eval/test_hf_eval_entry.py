@@ -1,5 +1,6 @@
 """The eval entry point: eval-set paths, prompt token counting and its light imports."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +47,38 @@ def test_the_token_counter_renders_a_prior_tool_call_the_way_sglang_does(tmp_pat
     count = entry._token_counter(tmp_path)
 
     assert count(messages, None) == len("user q assistant query x tool obs".split())
+
+
+def _save(root: Path, step: int, *, copied: int, runs: dict | None = None) -> Path:
+    save = root / f"iter_{step:07d}"
+    (save / "hf").mkdir(parents=True)
+    (save / "hf/.complete").write_text("")
+    (root / "latest_checkpointed_iteration.txt").write_text(str(copied))
+    if runs is not None:
+        (root / entry.MLFLOW_RUNS).write_text(json.dumps(runs))
+    return save
+
+
+def test_a_save_is_served_from_its_hf_export_with_its_training_run(tmp_path):
+    save = _save(tmp_path, 25, copied=50, runs={"25": "train-run"})
+
+    path, model = entry.model_source(tmp_path, str(save))
+
+    assert path == save / "hf"
+    assert model == {"kind": "checkpoint", "path": str(save), "rollout_id": 25, "mlflow_run_id": "train-run"}
+
+
+def test_a_save_the_copy_has_not_reached_is_refused(tmp_path):
+    save = _save(tmp_path, 25, copied=0)
+
+    with pytest.raises(ValueError, match="fully copied"):
+        entry.model_source(tmp_path, str(save))
+
+
+def test_the_eval_reads_the_file_the_publisher_writes():
+    from tools.air import publisher
+
+    assert entry.MLFLOW_RUNS == publisher.MLFLOW_RUNS
 
 
 def test_eval_imports_without_training_or_model_dependencies():

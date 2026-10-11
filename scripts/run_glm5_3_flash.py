@@ -25,8 +25,9 @@ Args:
   --persist-dir: save locally, copy every save there in the background (tools/air/publisher.py), and
     resume from the newest copied save; without one, start from the converted reference.
   --skip-download: ``prepare`` converts the checkpoint already at ``--hf-checkpoint``, without downloading.
-  --mlflow-experiment: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is set);
-    --mlflow-run-id logs into an existing run, such as the AIR job's.
+  --mlflow-experiment / --mlflow-run-id: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is
+    set), into a new run of the experiment or into an existing run such as the AIR job's, which then
+    takes the run id as its name.
 
 Examples:
   python scripts/run_glm5_3_flash.py prepare
@@ -395,18 +396,13 @@ def _agentic_args(args: ScriptArgs) -> list[str]:
 
 def _tracking_args(args: ScriptArgs) -> list[str]:
     flags = shlex.split(U.get_default_wandb_args(__file__, run_id=args.run_id))
+    if args.mlflow_experiment is None and args.mlflow_run_id is None:
+        return flags
+    flags += ["--use-mlflow", "--mlflow-tracking-uri", "databricks", "--mlflow-run-name", args.run_id]
     if args.mlflow_experiment is not None:
-        flags += [
-            "--use-mlflow",
-            "--mlflow-tracking-uri",
-            "databricks",
-            "--mlflow-experiment-name",
-            args.mlflow_experiment,
-            "--mlflow-run-name",
-            args.run_id,
-        ]
-        if args.mlflow_run_id is not None:
-            flags += ["--mlflow-run-id", args.mlflow_run_id]
+        flags += ["--mlflow-experiment-name", args.mlflow_experiment]
+    if args.mlflow_run_id is not None:
+        flags += ["--mlflow-run-id", args.mlflow_run_id]
     return flags
 
 
