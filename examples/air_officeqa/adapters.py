@@ -1,4 +1,4 @@
-"""OfficeQA tools for the GLM-5.3-Flash agent loop.
+"""OfficeQA tools for the agent loop.
 
 ``run_tool`` is the agent's ``MILES_TOOL_EXECUTOR`` (see ``examples/air_officeqa/agent.py``); the
 reward is ``path_reward.score``. Run the agent with ``terminal_tools=["submit_report"]`` so the report

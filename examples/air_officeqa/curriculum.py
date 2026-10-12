@@ -1,6 +1,6 @@
 """Adaptive question sampling for OfficeQA RL on the fully-async rollout.
 
-``CurriculumDataSource`` is the GLM-5.3 launcher's ``--data-source-path``. Its settings live in
+``CurriculumDataSource`` is run_officeqa.py's ``--data-source-path``. Its settings live in
 ``curriculum.json`` beside the prompt file (prepare_data.py writes it):
 
     seed                     sampling seed

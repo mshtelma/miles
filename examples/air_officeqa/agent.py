@@ -1,4 +1,4 @@
-"""Bounded GLM-5.3-Flash agent loop for the Miles TITO session endpoint.
+"""Bounded agent loop for the Miles TITO session endpoint.
 
 ``MILES_TOOL_EXECUTOR`` and ``MILES_REWARD_FN`` name trusted synchronous
 ``module:function`` adapters. The tool adapter runs work in an isolated sandbox
@@ -328,7 +328,7 @@ async def _tool_result(run_tool, *, call, metadata, allowed_tools, settings) -> 
         }
         # Keep blocking sandbox calls off asyncio's default pool, which also decodes
         # samples. Queueing behind unrelated work must not consume the tool deadline.
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="glm53-tool")
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="officeqa-tool")
         try:
             future = asyncio.get_running_loop().run_in_executor(executor, run_tool, name, arguments, context)
             result = await asyncio.wait_for(future, settings.tool_timeout_s)
@@ -345,7 +345,7 @@ async def _score(score, *, messages, metadata, timeout_s) -> tuple[float, dict |
     """(reward, details): a scorer returns the reward, or an object holding it under "reward"."""
     # A judge-backed scorer blocks for tens of seconds; like tools, keep it off asyncio's
     # default pool so many concurrent scores cannot starve sample decoding.
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="glm53-score")
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="officeqa-score")
     try:
         future = asyncio.get_running_loop().run_in_executor(executor, score, messages, metadata)
         result = await asyncio.wait_for(future, timeout_s)

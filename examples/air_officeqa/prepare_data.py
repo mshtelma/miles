@@ -1,4 +1,4 @@
-"""Build the GLM-5.3-Flash OfficeQA prompt files and corpus directory.
+"""Build the OfficeQA prompt files and corpus directory.
 
 Inputs, from the ``databricks/officeqa`` dataset on Hugging Face at ``OFFICEQA_REVISION``:
   * ``officeqa_full.csv``: the benchmark, 113 easy and 133 hard questions;

@@ -1,4 +1,4 @@
-"""The task reward of a GLM-5.3-Flash agent trajectory (the launcher's ``--custom-rm-path``)."""
+"""The task reward of an OfficeQA agent trajectory (the launcher's ``--custom-rm-path``)."""
 
 import math
 
