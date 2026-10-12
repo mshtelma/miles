@@ -114,13 +114,15 @@ _RECIPES: dict[str, _Recipe] = {
         default_nodes=3,
         # Log-probabilities over the 248K-token vocabulary are taken in chunks; whole, their logits do not fit. With
         # PyTorch's default allocator, a 150K-token step left a quarter of each H100 cached in fragments and NCCL found
-        # no room in the backward; the trainer is never colocated, so expandable segments are safe.
+        # no room in the backward; the trainer is never colocated, so expandable segments are safe. Its NCCL
+        # communicators then took another 15 GB a GPU in the first step, most of it NVLS buffers of up to 1 GB a
+        # communicator, so the trainer goes without NVLS (as scripts/run_inkling.py does); the engines keep it.
         layout_args=(
             "--sequence-parallel",
             "--log-probs-chunk-size",
             "4096",
             "--train-env-vars",
-            '{"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}',
+            '{"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True", "NCCL_NVLS_ENABLE": "0"}',
         ),
         convert_args="",
         weight_check_skip=("visual.",),
