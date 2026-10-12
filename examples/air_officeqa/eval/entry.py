@@ -6,6 +6,8 @@ in full: Megatron's tracker there has reached the save, and Miles marked its exp
 
 import argparse
 import asyncio
+import collections
+import faulthandler
 import json
 import logging
 import os
@@ -22,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Written next to the tracker by tools/air/publisher.py, which this module does not import: it needs Ray.
 MLFLOW_RUNS = "mlflow_runs.json"
+# A hung eval otherwise runs on silently until AIR's idle-GPU kill, with no sign of where it stopped.
+STALL_DUMP_S = 600
 
 
 def _parse(argv):
@@ -110,7 +114,51 @@ def _stop_texts(model_path: Path, tokenizer) -> tuple[str, ...]:
     return tuple(tokenizer.convert_ids_to_tokens(eos if isinstance(eos, list) else [eos]))
 
 
-async def _evaluate(args, url: str, model_path: Path, process):
+class _StallWatch:
+    """Dump the stacks when the eval stops making progress.
+
+    faulthandler's timer, re-armed on every tick, dumps every thread's stack if the event loop itself stops,
+    even while a thread holds the GIL. If the loop runs but no model turn finishes, ``_dump_stacks`` runs once.
+    """
+
+    def __init__(self, sglang_log: Path, *, stall_s: float = STALL_DUMP_S, clock=time.monotonic):
+        self._sglang_log = sglang_log
+        self._stall_s = stall_s
+        self._clock = clock
+        self._turns, self._progressed_at, self._dumped = 0, clock(), False
+
+    def tick(self, turns: int) -> None:
+        faulthandler.dump_traceback_later(self._stall_s, repeat=True)
+        now = self._clock()
+        if turns != self._turns:
+            self._turns, self._progressed_at, self._dumped = turns, now, False
+        elif not self._dumped and now - self._progressed_at > self._stall_s:
+            self._dumped = True
+            _dump_stacks(f"no model turn finished for {now - self._progressed_at:.0f} s", self._sglang_log)
+
+
+def _dump_stacks(reason: str, sglang_log: Path) -> None:
+    """Every thread's stack, where the pending tasks wait, and the end of the SGLang log."""
+    logger.error("%s; the stacks of all threads, the pending tasks and the end of the SGLang log follow", reason)
+    faulthandler.dump_traceback(all_threads=True)
+    waits = collections.Counter(_await_chain(task.get_coro()) for task in asyncio.all_tasks())
+    for chain, count in waits.most_common():
+        logger.error("%5d tasks wait at %s", count, chain)
+    if sglang_log.exists():
+        tail = sglang_log.read_text(errors="replace").splitlines()[-50:]
+        logger.error("SGLang log, last %d lines:\n%s", len(tail), "\n".join(tail))
+
+
+def _await_chain(coro) -> str:
+    """The frames of a suspended coroutine and of the coroutines it awaits, outermost first."""
+    frames = []
+    while (frame := getattr(coro, "cr_frame", None)) is not None:
+        frames.append(f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno} {frame.f_code.co_name}")
+        coro = coro.cr_await
+    return " > ".join(frames) or repr(coro)
+
+
+async def _evaluate(args, url: str, model_path: Path, process, *, sglang_log: Path):
     tokenizer = _tokenizer(model_path)
     chat = proxy.ChatProxy(
         url,
@@ -137,12 +185,15 @@ async def _evaluate(args, url: str, model_path: Path, process):
                 attempt_id=args.attempt_id,
             )
         )
+        watch = _StallWatch(sglang_log)
         while not task.done():
             if process.poll() is not None:
                 raise RuntimeError(f"SGLang exited with code {process.returncode} during the eval")
+            watch.tick(len(chat.records))
             await asyncio.wait([task], timeout=5)
         return await task, chat.summary()
     finally:
+        faulthandler.cancel_dump_traceback_later()
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -193,7 +244,7 @@ def main(argv=None) -> int:
     try:
         timings["ready_s"] = server.wait_ready(url, process, timeout_s=1800)
         started = time.monotonic()
-        outcomes, harness = asyncio.run(_evaluate(args, url, model_path, process))
+        outcomes, harness = asyncio.run(_evaluate(args, url, model_path, process, sglang_log=log_path))
         timings["eval_s"] = time.monotonic() - started
     finally:
         server.stop(process)

@@ -1,6 +1,9 @@
 """The eval entry point: eval-set paths, prompt token counting and its light imports."""
 
+import asyncio
+import faulthandler
 import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -109,3 +112,40 @@ def test_eval_imports_without_training_or_model_dependencies():
         "import examples.air_officeqa.eval.entry\n"
     )
     subprocess.run([sys.executable, "-c", script], check=True, cwd=Path(__file__).resolve().parents[5])
+
+
+def test_a_stalled_eval_dumps_once_until_turns_finish_again(tmp_path, monkeypatch):
+    dumps = []
+    monkeypatch.setattr(entry, "_dump_stacks", lambda reason, sglang_log: dumps.append(reason))
+    now = [0.0]
+    watch = entry._StallWatch(tmp_path / "sglang.log", stall_s=600, clock=lambda: now[0])
+    try:
+        for now[0], turns in [(300, 1), (850, 1), (950, 1), (990, 1), (1000, 2), (1700, 2)]:
+            watch.tick(turns)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+    assert dumps == ["no model turn finished for 650 s", "no model turn finished for 700 s"]
+
+
+def test_the_stall_dump_shows_where_tasks_wait_and_the_end_of_the_sglang_log(tmp_path, monkeypatch, caplog):
+    threads = []
+    monkeypatch.setattr(entry.faulthandler, "dump_traceback", lambda **kwargs: threads.append(kwargs))
+    sglang_log = tmp_path / "sglang.log"
+    sglang_log.write_text("".join(f"line {i}\n" for i in range(100)))
+
+    async def waits_for_the_server(event):
+        await event.wait()
+
+    async def main():
+        event = asyncio.Event()
+        tasks = [asyncio.create_task(waits_for_the_server(event)) for _ in range(3)]
+        await asyncio.sleep(0)
+        entry._dump_stacks("stalled", sglang_log)
+        event.set()
+        await asyncio.gather(*tasks)
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(main())
+    assert threads == [{"all_threads": True}]
+    assert "3 tasks wait at" in caplog.text and "waits_for_the_server > locks.py" in caplog.text
+    assert "line 99" in caplog.text and "line 49\n" not in caplog.text
