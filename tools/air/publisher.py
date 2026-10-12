@@ -1,11 +1,11 @@
 """Copy each training save from the nodes' local disks to the Volume while training goes on.
 
-``examples/air_officeqa/run_officeqa.py --persist-dir DIR`` sets ``--checkpoint-publisher-path`` to
-``VolumePublisher`` and exports ``MILES_PERSIST_DIR=DIR``. Megatron saves to ``--save`` on each node's
+``tools/air/train.yaml``, or a launcher option such as ``run_officeqa.py --persist-dir DIR``, sets
+``--checkpoint-publisher-path`` to ``VolumePublisher`` and exports ``MILES_PERSIST_DIR=DIR``. Megatron saves to ``--save`` on each node's
 local disk. Once the trainer and the rollout state are saved, one task per node copies that node's part of
 the save into DIR and deletes it locally. Megatron's tracker, ``latest_checkpointed_iteration.txt``, is
 written last, so ``--load DIR`` resumes only from a save that was copied whole. The older saves then lose
-their training state, about 4.4 TB each, and keep only their HF export.
+their training state and keep only their HF export.
 
 When the run logs to MLflow, ``mlflow_runs.json`` in DIR maps each save to the MLflow run that made it,
 which an eval of the save logs into, and that run gets a ``miles.save.<step>`` tag with the save's path.

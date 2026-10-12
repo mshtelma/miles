@@ -58,8 +58,8 @@ class ChatProxy:
 
     async def _open(self, _app) -> None:
         # A fresh connection per turn, never a kept-alive one: SGLang closes a connection idle for a few seconds,
-        # and a turn sent on one the busy loop has not yet seen closed dies with ServerDisconnectedError
-        # (an eval lost 7% of its trajectories so). A turn takes seconds, so the extra handshake costs nothing.
+        # and a turn sent on one the busy loop has not yet seen closed dies with ServerDisconnectedError.
+        # A turn takes seconds, so the extra handshake costs nothing.
         connector = aiohttp.TCPConnector(limit=0, force_close=True)
         self._session = aiohttp.ClientSession(timeout=self._timeout, connector=connector)
 

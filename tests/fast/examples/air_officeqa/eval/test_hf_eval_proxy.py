@@ -44,7 +44,7 @@ class _KeepAliveExpiringUpstream:
     """A server that drops a kept-alive connection when a second request arrives on it.
 
     SGLang (uvicorn) closes a connection idle for a few seconds, and a request sent on it right then dies with
-    ServerDisconnectedError before the server sees it: an eval lost 7% of its trajectories so, every turn logged 200.
+    ServerDisconnectedError before the server sees it.
     """
 
     def __init__(self) -> None:

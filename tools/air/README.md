@@ -1,8 +1,8 @@
 # Miles on Databricks AI Runtime
 
-Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory is how Miles runs there with
-any launcher and any task: two jobs, which prepare a launcher's inputs and train with it, and the helpers they use.
-This page describes how Miles maps onto AIR. [OfficeQA on AIR](../../examples/air_officeqa/README.md) builds a
+Databricks AI Runtime (AIR) runs a command on serverless GPU nodes. This directory runs any Miles launcher
+there: one job prepares the launcher's inputs, another trains with it, and the helpers they share. This page
+describes how Miles maps onto AIR. [OfficeQA on AIR](../../examples/air_officeqa/README.md) builds a
 complete agentic flow from these pieces: prepare, train and evaluate, with GLM-5.3-Flash or Qwen3.5-35B-A3B.
 
 ## How an AIR job runs

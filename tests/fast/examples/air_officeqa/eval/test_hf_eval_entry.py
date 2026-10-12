@@ -23,8 +23,8 @@ def test_eval_set_paths_are_relative_to_staged_inputs(tmp_path):
 
 
 def test_the_token_counter_renders_a_prior_tool_call_the_way_sglang_does(tmp_path) -> None:
-    # An eval once lost every trajectory here: the agent sends tool-call arguments as a JSON string, and the GLM
-    # template iterates them as a dict (chat_template.jinja: ``tc.arguments.items()``).
+    # The agent sends tool-call arguments as a JSON string, and the GLM template iterates them as a dict
+    # (chat_template.jinja: ``tc.arguments.items()``).
     from tokenizers import Tokenizer, models, pre_tokenizers
     from transformers import PreTrainedTokenizerFast
 

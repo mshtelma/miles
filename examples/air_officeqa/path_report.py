@@ -30,7 +30,7 @@ COMPUTE_TOOL = "compute"
 # Outcome statuses.
 SCORED = "scored"  # correct answer + supported, trace-consistent path -> graded score
 ZERO = "zero"  # wrong/missing answer, malformed report, or confirmed invalid path
-UNKNOWN = "unknown"  # verifier failure or unresolved assessment -- NOT a negative
+UNKNOWN = "unknown"  # verifier failure or unresolved assessment, not a negative
 ABSTENTION = "abstention"  # explicit {"answer":"DATA NOT AVAILABLE","path":[]}: zero, recorded apart
 
 # The path_status values the support judge may return.
@@ -422,8 +422,8 @@ def check_references(
 ) -> RefCheck:
     """Resolve every cited observation against the runtime-owned ledger.
 
-    Deterministic only: this does NOT prove the claimed value or interpretation;
-    it rejects references that CANNOT be evidence -- nonexistent, cross-episode, undelivered,
+    Deterministic only: this does not prove the claimed value or interpretation;
+    it rejects references that cannot be evidence: nonexistent, cross-episode, undelivered,
     and compute steps whose declared input evidence was not visible when the compute call was
     generated (impossible chronology; running a read first in the same parallel batch does
     not establish visibility).
@@ -481,17 +481,17 @@ def check_references(
 # ===========================================================================
 # A LEAF step (cites a non-compute observation and declares no depends_on) that
 # attributes a specific figure to a looked-up observation must have that figure
-# actually present in the delivered trace. This catches value FABRICATION with
-# NO model judgment. It is deliberately CONSERVATIVE so it can never false-reject
-# an honest report -- the semantic judge, not this gate, owns wrong-row / wrong-
-# period / support:
+# actually present in the delivered trace. This catches fabricated values with
+# no model judgment. It is deliberately conservative so it never rejects an honest
+# report; the semantic judge, not this gate, owns wrong-row / wrong-period /
+# support:
 #   * only "value-like" numbers are checked (>=3 integer digits, or a thousands
 #     separator / decimal / currency marker); bare 1-2 digit integers and
 #     plausible calendar years (1900-2099) are ignored (coincidence/period risk);
-#   * a value counts as present if it matches ANY delivered observation's number
-#     at unit scale or a decimal-scale variant (x/ /1e3, 1e6, 1e9) -- so a leaf
+#   * a value counts as present if it matches any delivered observation's number
+#     at unit scale or a decimal-scale variant (x/ /1e3, 1e6, 1e9), so a leaf
 #     claim that paraphrases units ("1.47 trillion" vs a delivered "1,470,000")
-#     is NOT flagged;
+#     is not flagged;
 #   * a real number that is merely mis-attributed (present somewhere in the
 #     trace, wrong row/period) is left to the judge, never rejected here.
 _YEAR_LO, _YEAR_HI = 1900, 2099

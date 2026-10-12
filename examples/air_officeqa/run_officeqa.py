@@ -453,8 +453,8 @@ def _agentic_args(args: ScriptArgs) -> list[str]:
         "--custom-rm-path",
         "examples.air_officeqa.reward.reward_func",
         "--use-session-server",
-        # Each worker assembles its sessions' samples on one event loop; at 480 sessions in flight,
-        # 32 workers left long episodes waiting past their collect deadline.
+        # Each worker assembles its sessions' samples on one event loop; 32 were too few for 480
+        # sessions in flight, and long episodes missed their collect deadline.
         "--session-server-workers",
         "64",
         "--tito-model",

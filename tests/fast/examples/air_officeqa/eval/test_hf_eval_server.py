@@ -56,7 +56,7 @@ def test_qwen35_is_served_with_its_renderers_template_and_parsers() -> None:
 
 
 def test_the_readiness_probe_samples_like_the_eval(tmp_path: Path) -> None:
-    # An early eval died here: a probe without top_p/top_k took the model's default top_p and crashed every rank.
+    # Without top_p and top_k, the probe gets the model's default top_p, which crashes every rank.
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 

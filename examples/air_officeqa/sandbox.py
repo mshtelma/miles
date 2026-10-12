@@ -118,8 +118,8 @@ _SANDBOX_OK: bool | None = None
 
 
 def _sandbox_ok() -> bool:
-    """True iff a REAL bwrap sandbox is usable here: the binary exists AND the runtime
-    actually permits the unshare (present-but-blocked userns -> False). Cached."""
+    """Whether bwrap can sandbox here: the binary exists and the runtime permits the unshare
+    (a blocked user namespace counts as unusable). Cached."""
     global _SANDBOX_OK
     if _SANDBOX_OK is not None:
         return _SANDBOX_OK
@@ -182,8 +182,7 @@ def _child_setenv() -> dict[str, str]:
         "NUMEXPR_NUM_THREADS": "1",
         "PYTHONHASHSEED": "0",
         "PYTHONDONTWRITEBYTECODE": "1",
-        # Pass the resource knobs THROUGH -- the child re-reads them at import (the old
-        # _child_env dropped OQ_COMPUTE_MEM_MB, so RLIMIT_AS was never set in the child).
+        # The child re-reads the resource limits at import.
         "OQ_COMPUTE_MEM_MB": str(_MEM_MB),
         "OQ_COMPUTE_TIMEOUT_S": str(_TIMEOUT_S),
     }
@@ -256,7 +255,7 @@ def run_code(code: str) -> str:
             env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
             close_fds=True,
         )
-    except Exception as e:  # noqa: BLE001 - FAIL CLOSED, never run in-process
+    except Exception as e:  # noqa: BLE001 - fail closed, never run the code in-process
         return f"Error: compute sandbox failed to launch ({type(e).__name__}: {e})"
 
     try:
@@ -280,8 +279,7 @@ def run_code(code: str) -> str:
     except Exception:  # noqa: BLE001
         return "Error: compute returned an unparseable result."
 
-    # Uniform output cap on EVERY path -- the error branch previously bypassed it, so
-    # `raise ValueError('x'*10000)` returned ~10k chars past the advertised cap.
+    # Every path, errors included, is capped.
     if data.get("err"):
         pre = str(data.get("stdout") or "").strip()
         msg = f"Error: {str(data['err'])[:2000]}"

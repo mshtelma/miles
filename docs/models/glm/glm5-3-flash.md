@@ -87,7 +87,7 @@ base model or a save on 43 held-out questions, and the AIR jobs for all three: s
 
 ## 6. What a Healthy OfficeQA Run Looks Like
 
-A 50-step OfficeQA run of this recipe on 8x B300 showed these metrics:
+A 50-step OfficeQA run of this recipe on eight 8x B300 nodes showed these metrics:
 
 | Metric | Observed |
 |---|---|

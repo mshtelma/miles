@@ -47,7 +47,7 @@ from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
-# The session server's assembly plus decoding the returned samples here.
+# The session server's collect deadline, plus time to decode the samples it returns.
 _COLLECT_TIMEOUT = SESSION_COLLECT_TIMEOUT + 300
 
 

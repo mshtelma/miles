@@ -12,7 +12,7 @@ confirm that the path supports the answer before the answer earns reward. Traini
 | `Qwen3.5-35B-A3B` | three nodes of 8x H100 | two nodes: TP2 with sequence parallelism, CP8, EP8 | one |
 
 Qwen3.5-35B-A3B runs the same agent, tools and reward on 24 H100s. Before any training it solves 19% of the
-held-out questions on the first try (GLM-5.3-Flash 42%), so its reward has a signal from the first step.
+held-out questions on the first try (GLM-5.3-Flash about 40%), so its reward has a signal from the first step.
 [`models.py`](./models.py) holds each model's checkpoint and engine flags, and
 [`run_officeqa.py`](./run_officeqa.py) its trainer layout.
 

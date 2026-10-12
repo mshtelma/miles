@@ -8,7 +8,7 @@ from examples.air_officeqa import answer_check
 @pytest.mark.parametrize(
     ("gold", "answer"),
     [
-        ("-1299", "-$1,299 million (a net decrease of $1,299 million)"),  # R3 marked 7 of 8 of these wrong
+        ("-1299", "-$1,299 million (a net decrease of $1,299 million)"),
         ("-113.42", "-$113.42"),
         ("543 million", "543000000"),
         ("543 million", "543"),
