@@ -101,7 +101,7 @@ _RECIPES: dict[str, _Recipe] = {
         # still checked exactly, which catches real mapping bugs.
         weight_check_skip=("visual.", "mlp.experts."),
         model_args=("--model-name", "glm5_next", "--qkv-format", "thd"),
-        max_concurrent_samples=480,
+        max_concurrent_samples=4 * MODELS["GLM-5.3-Flash"].sessions_per_engine,  # four engines
     ),
     # Two 8-GPU nodes train: TP2 with sequence parallelism, CP8, EP8. A 150K-token episode is then about 19K tokens
     # a GPU; on one node, at 38K, the log-probability pass alone overflows an H100.
@@ -131,8 +131,7 @@ _RECIPES: dict[str, _Recipe] = {
         # log-probabilities: at 150K tokens that alone overflows an H100. RL trains without it, and the HF export
         # carries the base model's MTP unchanged.
         model_args=("--attention-backend", "flash", "--mtp-num-layers", "0"),
-        # One H100 engine holds about 68 OfficeQA sessions (2.4M tokens of KV cache): a step's 64 episodes.
-        max_concurrent_samples=64,
+        max_concurrent_samples=MODELS["Qwen3.5-35B-A3B"].sessions_per_engine,  # one engine
     ),
 }
 

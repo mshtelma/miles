@@ -149,3 +149,11 @@ def test_the_stall_dump_shows_where_tasks_wait_and_the_end_of_the_sglang_log(tmp
     assert threads == [{"all_threads": True}]
     assert "3 tasks wait at" in caplog.text and "waits_for_the_server > locks.py" in caplog.text
     assert "line 99" in caplog.text and "line 49\n" not in caplog.text
+
+
+@pytest.mark.parametrize(("model_name", "sessions"), [("GLM-5.3-Flash", 120), ("Qwen3.5-35B-A3B", 64)])
+def test_the_eval_runs_as_many_trajectories_at_once_as_a_training_engine(tmp_path, monkeypatch, model_name, sessions):
+    monkeypatch.setenv("MLFLOW_RUN_ID", "attempt")
+    argv = ["--volume-root", str(tmp_path), "--run-id", "eval", "--model-name", model_name]
+    assert entry._parse(argv).max_concurrent == sessions
+    assert entry._parse([*argv, "--max-concurrent", "8"]).max_concurrent == 8

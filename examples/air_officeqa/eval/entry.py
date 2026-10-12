@@ -37,12 +37,14 @@ def _parse(argv):
     parser.add_argument("--hf-source", default="base", help="base, or a save's directory .../checkpoints/iter_<step>")
     parser.add_argument("--eval-set", action="append", metavar="NAME=PATH")
     parser.add_argument("--samples-per-prompt", type=int, default=8)
-    parser.add_argument("--max-concurrent", type=int, default=480)
+    parser.add_argument("--max-concurrent", type=int, help="trajectories at once; by default, one training engine's")
     parser.add_argument("--max-seq-len", type=int, default=150_000)
     parser.add_argument("--max-lost-fraction", type=float, default=0.05)
     parser.add_argument("--limit-questions", type=int, default=0)
     parser.add_argument("--port", type=int, default=server.DEFAULT_PORT)
     args = parser.parse_args(argv)
+    # More trajectories than training puts on one engine only queue, and the slowest miss their deadline.
+    args.max_concurrent = args.max_concurrent or MODELS[args.model_name].sessions_per_engine
     args.attempt_id = os.environ["MLFLOW_RUN_ID"]
     args.out_dir = args.volume_root / "runs" / args.run_id / args.attempt_id
     args.eval_sets = _eval_sets(args.eval_set or ["heldout=data/officeqa/eval_heldout.jsonl"], args.local_root)

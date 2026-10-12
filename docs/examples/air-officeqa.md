@@ -153,8 +153,9 @@ air -p <profile> run $AIR/eval.yaml --override "${COMMON[@]}" "${MODEL[@]}" env_
 ```
 
 The eval serves the checkpoint with a standalone SGLang server, set up like the rollout engines. It runs the
-training agent, tools and reward on the 43 held-out questions, eight samples each. A save qualifies once its
-copy has finished and its HF export is complete. `EVAL_ARGS` takes the flags of
+training agent, tools and reward on the 43 held-out questions, eight samples each, with as many episodes in
+flight as one training engine serves. A save qualifies once its copy has finished and its HF export is
+complete. `EVAL_ARGS` takes the flags of
 [`eval/entry.py`](https://github.com/radixark/miles/blob/main/examples/air_officeqa/eval/entry.py), such as `--samples-per-prompt 4` or `--limit-questions 3`.
 
 Each eval writes these files to `runs/<EVAL_RUN_ID>/<mlflow-run-id>/`:

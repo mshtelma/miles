@@ -20,6 +20,7 @@ class Model:
     tito_model: str  # the session server's renderer (--tito-model)
     engine_gpus: int  # GPUs per SGLang engine, its tensor- and expert-parallel size
     sglang_args: tuple[str, ...]  # the model's own engine flags, as Miles takes them
+    sessions_per_engine: int  # OfficeQA episodes one engine serves at once, in training and in the eval
 
     @property
     def torch_dist(self) -> str:
@@ -47,6 +48,7 @@ MODELS: dict[str, Model] = {
                 "--sglang-moe-runner-backend",
                 "triton",
             ),
+            sessions_per_engine=120,
         ),
         Model(
             name="Qwen3.5-35B-A3B",
@@ -57,6 +59,8 @@ MODELS: dict[str, Model] = {
             engine_gpus=8,
             # FlashAttention 3, SGLang's default on Hopper, is not in the AIR image.
             sglang_args=("--sglang-attention-backend", "flashinfer", "--sglang-moe-runner-backend", "triton"),
+            # One H100 engine holds about 68 OfficeQA sessions (2.4M tokens of KV cache).
+            sessions_per_engine=64,
         ),
     )
 }
