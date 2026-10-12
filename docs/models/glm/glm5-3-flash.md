@@ -61,8 +61,20 @@ The defaults are the standard math recipe:
 
 Another task is a matter of flags: `--prompt-data` for the prompts, `--no-enable-eval`, and `--extra-args` for
 the rest, such as `--custom-rm-path`. `--save-hf` writes a drop-in HF checkpoint inside each save (`iter_*/hf`,
-in the base model's layout); the trainer waits for it, 10 to 12 minutes a save. Without `--save-hf`, convert a
+in the base model's layout); the trainer waits for it, about 10 minutes a save. Without `--save-hf`, convert a
 save later with `tools/convert_torch_dist_to_hf.py`.
+
+A four-step check of these defaults on eight 8x B300 nodes showed:
+
+| Metric | Observed |
+|---|---|
+| `train/train_rollout_logprob_abs_diff` | 0.03 |
+| `train/grad_norm` | 0.18 – 0.24 |
+| `eval/aime24` | 0.77 – 0.80 |
+| response length | 4.7K – 5.7K tokens, 29 – 42% of them at the 8K limit |
+
+The first step lands about 75 minutes after the job starts: the engines load, AIME-2024 is evaluated once,
+and the first rollout fills. Later steps take a few minutes each.
 
 On Databricks AI Runtime, `tools/air/prepare.yaml` and `tools/air/train.yaml` run this launcher (see
 [Miles on Databricks AI Runtime](https://github.com/radixark/miles/blob/main/tools/air/README.md)).
@@ -99,3 +111,16 @@ A 50-step OfficeQA run of this recipe on eight 8x B300 nodes showed these metric
 
 `train/train_rollout_logprob_abs_diff` is the one to read first on a fresh bring-up. It covers the
 KDA, DSA and hyper-connection paths at once.
+
+A longer run, evaluated on the 43 held-out questions every 50 steps, shows where the gains come from:
+
+| Steps trained | 0 | 50 | 100 | 150 | 175 |
+|---|---|---|---|---|---|
+| pass@1 | 0.39 | 0.47 | 0.47 | 0.48 | 0.47 |
+| pass@3 | 0.54 | 0.63 | 0.61 | 0.62 | 0.62 |
+| fabricated answers | 11.6% | 4.1% | 1.8% | 2.3% | 0.6% |
+
+Held-out pass@1 gains about eight points in the first 50 steps and stays flat after that, while the training
+reward keeps rising, to 0.86 at step 175: with 203 training questions, later steps mostly fit those. Fabricated
+answers fall from 12% to under 1%. Evaluate saves as the run goes, and keep the one where held-out accuracy
+stops improving.
