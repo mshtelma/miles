@@ -39,6 +39,19 @@ class RayWorkerHandle(BaseWorkerHandle):
         except (TimeoutError, asyncio.TimeoutError) as e:
             raise WorkerUnreachableError(f"Worker not ready within {timeout}s") from e
 
+    async def is_dead(self, *, timeout: float) -> bool:
+        """Whether Ray reports the actor dead. No reply within ``timeout``, or an actor Ray reports as temporarily
+        unavailable, is not death."""
+        try:
+            await asyncio.wait_for(self._actor_handle.__ray_ready__.remote(), timeout=timeout)
+        except ray.exceptions.ActorUnavailableError:
+            return False
+        except (ray.exceptions.RayActorError, ray.exceptions.RayTaskError):
+            return True
+        except (TimeoutError, asyncio.TimeoutError):
+            return False
+        return False
+
     async def wait_dead(self, *, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while True:

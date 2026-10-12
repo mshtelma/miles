@@ -1144,3 +1144,91 @@ class TestCellOperations:
         await weight_update
 
         assert weight_update_started.is_set()
+
+
+class _PendingCell:
+    def __init__(self, cell_id: str) -> None:
+        self.meta = SimpleNamespace(cell_id=cell_id, workers_hash="pseudo-hash-1")
+        self.is_uninitialized = False
+        self.is_pending_weights = False
+        self.is_pending_weights_or_serving = False
+
+
+class _DeadCellsWorkerManager:
+    def __init__(self, dead: list[str]) -> None:
+        self.dead = dead
+        self.asked: list[list[str]] = []
+
+    @property
+    def find_dead_cells(self) -> Any:
+        def _record(cell_ids: list[str]) -> list[str]:
+            self.asked.append(list(cell_ids))
+            return self.dead
+
+        return _ResultRemoteCall(_record)
+
+
+class _ResultRemoteCall:
+    def __init__(self, fn: Any) -> None:
+        self._fn = fn
+
+    def remote(self, *args: Any, **kwargs: Any) -> asyncio.Future:
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future.set_result(self._fn(*args, **kwargs))
+        return future
+
+
+class TestDeadEnginesFailFast:
+    def _controller(self, monkeypatch: pytest.MonkeyPatch, *, cells: dict, dead: list[str], ft_components: list[str]):
+        manager = _DeadCellsWorkerManager(dead)
+        monkeypatch.setattr(
+            inference_controller_module, "RayWorkerManager", SimpleNamespace(get_handle=lambda: manager)
+        )
+        monkeypatch.setattr(inference_controller_module, "CELLS_READY_POLL_INTERVAL_SECONDS", 0.01)
+        monkeypatch.setattr(inference_controller_module, "DEAD_CELLS_CHECK_INTERVAL_SECONDS", 0.0)
+        controller = _make_controller({"default": _RecordingServer(cells, update_weights=True)})
+        controller.args.ft_components = ft_components
+        return controller, manager
+
+    @pytest.mark.asyncio
+    async def test_a_dead_engine_fails_the_wait_at_once(self, monkeypatch: pytest.MonkeyPatch):
+        """Without fault tolerance nothing restarts it, so waiting out the hour only hides the cause."""
+        cells = {"engine-0": _PendingCell("engine-0"), "engine-1": _PendingCell("engine-1")}
+        controller, manager = self._controller(monkeypatch, cells=cells, dead=["engine-1"], ft_components=[])
+
+        with pytest.raises(RuntimeError, match=r"\['engine-1'\] died before becoming ready"):
+            await asyncio.wait_for(controller.start_update_weights(), timeout=5)
+
+        assert manager.asked == [["engine-0", "engine-1"]]
+
+    @pytest.mark.asyncio
+    async def test_engines_that_load_within_the_check_interval_are_only_waited_for(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The first liveness check comes one interval in, so a normal start never pays for it."""
+        cell = _PendingCell("engine-0")
+        controller, manager = self._controller(monkeypatch, cells={"engine-0": cell}, dead=[], ft_components=[])
+        monkeypatch.setattr(inference_controller_module, "DEAD_CELLS_CHECK_INTERVAL_SECONDS", 30.0)
+
+        async def _become_ready() -> None:
+            await asyncio.sleep(0.1)
+            cell.is_pending_weights = cell.is_pending_weights_or_serving = True
+
+        ready = asyncio.create_task(_become_ready())
+        await asyncio.wait_for(controller.start_update_weights(), timeout=5)
+        await ready
+
+        assert manager.asked == []
+
+    @pytest.mark.asyncio
+    async def test_with_rollout_fault_tolerance_a_dead_engine_is_left_to_heal(self, monkeypatch: pytest.MonkeyPatch):
+        """The mini fault-tolerance controller restarts dead cells, so the wait keeps its deadline."""
+        controller, manager = self._controller(
+            monkeypatch, cells={"engine-0": _PendingCell("engine-0")}, dead=["engine-0"], ft_components=["rollout"]
+        )
+        monkeypatch.setattr(inference_controller_module, "CELLS_READY_TIMEOUT_SECONDS", 0.05)
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(controller.start_update_weights(), timeout=5)
+
+        assert manager.asked == []
