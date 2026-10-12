@@ -1,6 +1,6 @@
 ---
 title: "Agentic RL on OfficeQA on Databricks AI Runtime"
-description: "Agentic RL of GLM-5.3-Flash or Qwen3.5-35B-A3B on OfficeQA at 150K tokens on Databricks AI Runtime, from the published model to an evaluated checkpoint."
+description: "Agentic RL on OfficeQA at 150K tokens with GLM-5.3-Flash or Qwen3.5-35B-A3B on Databricks AI Runtime: prepare, train and evaluate."
 # Generated from examples/air_officeqa/README.md by scripts/tools/sync_example_docs.py. Edit that README, not this file.
 ---
 This example trains a research agent on [OfficeQA](https://huggingface.co/datasets/databricks/officeqa).
@@ -14,7 +14,7 @@ confirm that the path supports the answer before the answer earns reward. Traini
 | `GLM-5.3-Flash` (the default) | eight nodes of 8x B300 | four nodes: TP1, CP8, PP4, EP8 | four, one per node |
 | `Qwen3.5-35B-A3B` | three nodes of 8x H100 | two nodes: TP2 with sequence parallelism, CP8, EP8 | one |
 
-Qwen3.5-35B-A3B runs the same agent, tools and reward on 24 H100s. Before any training it solves 19% of the
+Both models run the same agent, tools and reward. Before any training Qwen3.5-35B-A3B solves 19% of the
 held-out questions on the first try (GLM-5.3-Flash about 40%), so its reward has a signal from the first step.
 [`models.py`](https://github.com/radixark/miles/blob/main/examples/air_officeqa/models.py) holds each model's checkpoint and engine flags, and
 [`run_officeqa.py`](https://github.com/radixark/miles/blob/main/examples/air_officeqa/run_officeqa.py) its trainer layout.
@@ -132,8 +132,9 @@ air -p <profile> logs <job-run-id> --download-to logs/  # every node, complete
 ```
 
 **Saves.** Each save is written to the nodes' local disks and copied to `runs/<RUN_ID>/checkpoints/` while
-training goes on. The trainer waits for the save and its HF export: 10 to 12 minutes for GLM-5.3-Flash,
-under 3 for Qwen3.5-35B-A3B. Only the newest save keeps its training state (4.4 TB for GLM-5.3-Flash,
+training goes on. The trainer waits for the save and its HF export: about 10 minutes for GLM-5.3-Flash,
+under 3 for Qwen3.5-35B-A3B. The job ends once the last save is copied, 15 to 45 minutes after it for
+GLM-5.3-Flash. Only the newest save keeps its training state (4.4 TB for GLM-5.3-Flash,
 486 GB for Qwen3.5-35B-A3B); the older ones keep just their HF checkpoint (328 GB and 72 GB).
 
 **Resume.** The jobs don't retry on their own, because a failed attempt would most likely fail the same
@@ -154,8 +155,8 @@ air -p <profile> run $AIR/eval.yaml --override "${COMMON[@]}" "${MODEL[@]}" env_
 
 The eval serves the checkpoint with a standalone SGLang server, set up like the rollout engines. It runs the
 training agent, tools and reward on the 43 held-out questions, eight samples each, with as many episodes in
-flight as one training engine serves. A save qualifies once its copy has finished and its HF export is
-complete. `EVAL_ARGS` takes the flags of
+flight as one training engine serves. A save can be evaluated once it is copied in full, with its HF
+export. `EVAL_ARGS` takes the flags of
 [`eval/entry.py`](https://github.com/radixark/miles/blob/main/examples/air_officeqa/eval/entry.py), such as `--samples-per-prompt 4` or `--limit-questions 3`.
 
 Each eval writes these files to `runs/<EVAL_RUN_ID>/<mlflow-run-id>/`:

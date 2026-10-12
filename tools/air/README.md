@@ -123,7 +123,7 @@ through its own `--persist-dir` and `--mlflow-run-id` options.
   `--sglang-mem-fraction-static 0.5`: the trainer loads its optimizer state while the engines hold their memory.
 * **Identity.** Jobs act as the submitting user. `permissions` shares a run with others, and
   `usage_policy_name` bills it to a serverless usage policy.
-* **The Databricks CLI.** Version 1.19 has the same commands as `databricks air`. It takes images from Unity
-  Catalog instead (`environment.unity_catalog_image`, pushed with `databricks air images push`), and rejects
+* **The Databricks CLI.** Version 1.19 has the same commands under `databricks air`, but it takes images from
+  Unity Catalog (`environment.unity_catalog_image`, pushed with `databricks air images push`) and rejects
   `environment.docker_image`, so these jobs run with `air`. An AIR job is also a task type in Databricks
   Asset Bundles, `ai_runtime_task`.

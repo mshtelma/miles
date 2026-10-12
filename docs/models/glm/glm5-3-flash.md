@@ -1,6 +1,6 @@
 ---
 title: GLM-5.3-Flash
-description: GLM-5.3-Flash, a KDA + DSA hybrid MoE, with fully async DAPO on math, and as an agent on OfficeQA at 150K tokens.
+description: Recipes for GLM-5.3-Flash, a KDA + DSA hybrid MoE - fully async DAPO on math, and agentic RL on OfficeQA at 150K tokens.
 ---
 
 Two recipes train GLM-5.3-Flash on the same eight-node layout. `scripts/run_glm5_3_flash.py` is its standard
@@ -29,12 +29,10 @@ serve the policy as 8-GPU SGLang engines, fully async. More nodes add engines.
 ## 3. Environment Setup
 
 Both recipes run on the Databricks AI Runtime image built from `docker/air/Dockerfile`
-(`python docker/build.py --variant air-glm53`). It pins:
-
-- miles;
-- SGLang `sglang-miles-glm53next` at `9a26e749`, with the patch in `docker/air/patches`;
-- Megatron-LM [`#89`](https://github.com/radixark/Megatron-LM/pull/89) at `e8f57451`;
-- bubblewrap and bm25s, for the agent's tools.
+(`python docker/build.py --variant air-glm53`). It starts from a pinned Miles image, which brings SGLang's
+[`sglang-miles-glm53next`](https://github.com/sgl-project/sglang/tree/sglang-miles-glm53next) branch and
+Megatron-LM with [#89](https://github.com/radixark/Megatron-LM/pull/89). The image adds the SGLang patch in
+`docker/air/patches`, and bubblewrap and bm25s for the agent's tools.
 
 Download the checkpoint and the math datasets, and convert the checkpoint (`--ref-load` resolves to
 `<--ckpt-dir>/glm5.3-flash_torch_dist`):

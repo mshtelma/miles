@@ -8,7 +8,7 @@ End-to-end training workflows — the place to start.
 
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs with FSDP using GRPO on the GEO3K dataset.
   - **[multi_turn](./geo3k_vlm/multi_turn)**: The same dataset over multiple turns, with the model cropping images through an interactive environment.
-- **[air_officeqa](./air_officeqa)**: Agentic RL of GLM-5.3-Flash or Qwen3.5-35B-A3B on OfficeQA at 150K tokens on Databricks AI Runtime, from the published model to an evaluated checkpoint.
+- **[air_officeqa](./air_officeqa)**: Agentic RL on OfficeQA at 150K tokens with GLM-5.3-Flash or Qwen3.5-35B-A3B on Databricks AI Runtime: prepare, train and evaluate.
 - **[lora](./lora)**: LoRA fine-tuning with the Megatron backend.
 - **[multi_lora](./multi_lora)**: Serve concurrent LoRA fine-tuning clients on one shared base model through the Tinker protocol.
 - **[on_policy_distillation](./on_policy_distillation)**: Teacher–student distillation on the student's own rollouts, run inside the on-policy training loop.
