@@ -9,7 +9,9 @@ multimodal checkpoints (``model.language_model.layers.*``, ``Glm5NextForConditio
 ``base_layout`` (``--save-hf-layout-path``) closes that gap as the shards are written: base names, the
 base's float dtype for tensors the trainer upcasts (GLM-5.3 trains its KDA convolutions in FP32 over a
 BF16 checkpoint), the base's shape where only size-1 dimensions differ, and the vision tower and the
-multi-token-prediction layer, which Megatron neither holds nor trains, copied from the base. It reads
+multi-token-prediction layer, which Megatron neither holds nor trains, copied from the base. A tensor the
+base packs differently keeps the converter's name: Qwen3.5's routed experts stay one tensor per expert
+(``mlp.experts.<i>.gate_proj``), which SGLang loads, where the base stores ``mlp.experts.gate_up_proj``. It reads
 the base from ``--hf-checkpoint``, which must hold the weights. Miles writes ``hf/.complete`` once every
 rank has finished; a failed export leaves no directory, and the DCP save remains the source of truth.
 """
