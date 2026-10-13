@@ -36,6 +36,7 @@ TICK_INTERVAL_SECONDS = 5.0
 CELL_TICK_TIMEOUT_SECONDS = 120.0
 CELLS_READY_POLL_INTERVAL_SECONDS = 2.0
 CELLS_READY_TIMEOUT_SECONDS = 3600.0
+DEAD_CELLS_CHECK_INTERVAL_SECONDS = 30.0
 
 
 @enforce_lock_discipline
@@ -193,6 +194,7 @@ class InferenceController:
     @requires_lock
     async def _ensure_cells_ready(self) -> None:
         deadline = time.monotonic() + CELLS_READY_TIMEOUT_SECONDS
+        next_death_check = time.monotonic() + DEAD_CELLS_CHECK_INTERVAL_SECONDS
         while True:
             cells = [cell for srv in self.servers.values() for cell in srv.server_cells.values()]
             if self.args.colocate:
@@ -200,6 +202,9 @@ class InferenceController:
             pending = [cell for cell in cells if not cell.is_pending_weights_or_serving]
             if not pending:
                 return
+            if time.monotonic() >= next_death_check:
+                await self._raise_if_cells_died(pending)
+                next_death_check = time.monotonic() + DEAD_CELLS_CHECK_INTERVAL_SECONDS
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"Timed out after {CELLS_READY_TIMEOUT_SECONDS}s waiting for "
@@ -208,6 +213,17 @@ class InferenceController:
             logger.info(f"Waiting for {len(pending)}/{len(cells)} cells to become ready...")
             async with self.context_lock.with_released():
                 await asyncio.sleep(CELLS_READY_POLL_INTERVAL_SECONDS)
+
+    @requires_lock
+    async def _raise_if_cells_died(self, cells: list[ServerCell]) -> None:
+        # With rollout fault tolerance the mini controller restarts a dead cell. Without it nothing does, and
+        # waiting out the deadline only delays the failure by up to an hour.
+        if "rollout" in self.args.ft_components:
+            return
+        async with self.context_lock.with_released():
+            dead = await RayWorkerManager.get_handle().find_dead_cells.remote([cell.meta.cell_id for cell in cells])
+        if dead:
+            raise RuntimeError(f"Rollout engines {dead} died before becoming ready; see their logs for the cause")
 
     @requires_lock
     def _get_updatable_server(self) -> RolloutServer | None:

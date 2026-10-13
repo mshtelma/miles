@@ -1,6 +1,9 @@
 """Each node copies its part of a save to the Volume and frees its disk; the tracker goes last."""
 
 import asyncio
+import json
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,11 +88,13 @@ def cluster(tmp_path, monkeypatch):
     return nodes
 
 
-def _older_save(remote: Path) -> Path:
-    """A save published before: its DCP state and its HF export."""
+def _older_save(remote: Path, *, hf: bool = True) -> Path:
+    """A save published before: its DCP state and, unless ``hf`` is false, its HF export."""
     iteration = remote / "iter_0000001"
-    (iteration / "hf").mkdir(parents=True)
-    (iteration / "hf/model-00001.safetensors").write_bytes(b"hf")
+    iteration.mkdir(parents=True)
+    if hf:
+        (iteration / "hf").mkdir()
+        (iteration / "hf/model-00001.safetensors").write_bytes(b"hf")
     (iteration / "__0_0.distcp").write_bytes(b"shard")
     (iteration / ".metadata").write_bytes(b"metadata")
     return iteration
@@ -121,6 +126,63 @@ def test_a_published_save_leaves_the_older_saves_only_their_hf_export(tmp_path, 
         "__1_0.distcp",
         "hf/model-00001.safetensors",
     ]
+
+
+def test_an_older_save_without_an_hf_export_is_removed(tmp_path, cluster, monkeypatch):
+    older = _older_save(tmp_path / "volume", hf=False)
+    copies = _Copies(cluster)
+    monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
+
+    asyncio.run(publisher.VolumePublisher(SimpleNamespace(save=str(tmp_path / "head"))).after_save(3))
+
+    assert not older.exists()
+
+
+class _FakeMlflowClient:
+    tags: list = []
+
+    def set_tag(self, run_id, key, value):
+        self.tags.append((run_id, key, value))
+
+
+@pytest.fixture
+def mlflow_client(monkeypatch):
+    tracking = types.ModuleType("mlflow.tracking")
+    tracking.MlflowClient = _FakeMlflowClient
+    monkeypatch.setitem(sys.modules, "mlflow", types.ModuleType("mlflow"))
+    monkeypatch.setitem(sys.modules, "mlflow.tracking", tracking)
+    monkeypatch.setattr(_FakeMlflowClient, "tags", [])
+    return _FakeMlflowClient
+
+
+def test_each_save_is_mapped_to_the_mlflow_run_that_made_it(tmp_path, cluster, monkeypatch, mlflow_client):
+    copies = _Copies(cluster)
+    monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
+    remote = tmp_path / "volume"
+    remote.mkdir()
+    (remote / publisher.MLFLOW_RUNS).write_text(json.dumps({"1": "earlier-run"}))
+    args = SimpleNamespace(save=str(tmp_path / "head"), mlflow_run_id=None)
+    publish = publisher.VolumePublisher(args)
+    args.mlflow_run_id = "train-run"  # Miles starts tracking after it makes the publisher
+
+    asyncio.run(publish.after_save(3))
+
+    assert json.loads((remote / publisher.MLFLOW_RUNS).read_text()) == {"1": "earlier-run", "3": "train-run"}
+    assert mlflow_client.tags == [("train-run", "miles.save.3", str(remote / "iter_0000003"))]
+
+
+def test_a_failed_mlflow_call_does_not_fail_the_save(tmp_path, cluster, monkeypatch, mlflow_client):
+    def unavailable(self, run_id, key, value):
+        raise OSError("MLflow unavailable")
+
+    copies = _Copies(cluster)
+    monkeypatch.setattr(publisher.ray, "remote", lambda **options: lambda function: copies)
+    monkeypatch.setattr(mlflow_client, "set_tag", unavailable)
+
+    publish = publisher.VolumePublisher(SimpleNamespace(save=str(tmp_path / "head"), mlflow_run_id="train-run"))
+    asyncio.run(publish.after_save(3))
+
+    assert (tmp_path / "volume/latest_checkpointed_iteration.txt").read_text() == "3"
 
 
 def test_a_failed_node_copy_leaves_the_tracker_and_the_older_saves_untouched(tmp_path, cluster, monkeypatch):

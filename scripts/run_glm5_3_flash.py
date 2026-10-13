@@ -1,32 +1,26 @@
-"""Train GLM-5.3-Flash on OfficeQA with fully async agentic RL (DAPO, 150K-token context).
+"""Train GLM-5.3-Flash with fully async DAPO on DAPO-Math-17k, the standard Miles math recipe.
 
-The OfficeQA agent (examples/glm5_3_flash) answers questions about U.S. Treasury Bulletins with four
-retrieval tools and a Python sandbox, then submits a report; the reward checks the answer against the
-gold one and asks an LLM judge whether the cited path supports it. On eight 8-GPU nodes, four nodes
-train (TP1, CP8, PP4, EP8) and four serve the policy with SGLang.
+On eight 8-GPU nodes, four nodes train (TP1, CP8, PP4 with 11/11/11/12 layers, EP8) and four serve the policy as
+8-GPU SGLang engines, which keep generating while the trainer steps. The reward is the deepscaler answer check, and
+AIME-2024 is evaluated every 20 steps. Another task is a matter of flags: ``--prompt-data`` for the prompts and
+``--extra-args`` for the rest, such as ``--custom-rm-path``. examples/air_officeqa trains this layout on an agentic
+task; tools/air runs this launcher on Databricks AI Runtime.
 
 What must exist before ``train``:
-  * the HF checkpoint at ``{model_dir}/GLM-5.3-Flash`` and its Megatron conversion at
-    ``{ckpt_dir}/glm5.3-flash_torch_dist`` (``prepare`` makes both);
-  * the OfficeQA data at ``{data_dir}/officeqa``, written by
-    ``python -m examples.glm5_3_flash.officeqa.prepare_data``;
-  * for more than one node, a joined Ray cluster (``MILES_SCRIPT_EXTERNAL_RAY=1``); on Databricks AI
-    Runtime, examples/glm5_3_flash/officeqa/air/train.yaml starts one;
-  * for the OfficeQA reward, Databricks credentials for the judge endpoints in
-    examples/glm5_3_flash/officeqa/judges.json (``DATABRICKS_HOST`` and ``DATABRICKS_TOKEN`` are
-    passed to the workers).
+  * the HF checkpoint at ``{model_dir}/GLM-5.3-Flash``, its Megatron conversion at
+    ``{ckpt_dir}/glm5.3-flash_torch_dist``, and the datasets under ``{data_dir}`` (``prepare`` makes all three);
+  * for more than one node, a joined Ray cluster (``MILES_SCRIPT_EXTERNAL_RAY=1``).
 
 Args:
-  --num-nodes: nodes in the Ray cluster; the full model's trainer takes four, the rest serve.
-  --seq-length / --rollout-max-response-len: total context per episode, and tokens per model turn.
+  --num-nodes: nodes in the Ray cluster; the trainer takes four, the rest serve, eight GPUs per engine.
+  --seq-length / --rollout-max-response-len: tokens per sample, and per response.
   --num-rollout / --rollout-batch-size / --n-samples-per-prompt: steps, prompts per step, samples each.
-  --save-interval / --save-hf: full-state saves every N steps, each with a drop-in HF checkpoint
-    (the trainer waits for the export; a full-model save takes 10 to 12 minutes with it).
-  --persist-dir: save locally, copy every save there in the background (tools/air/publisher.py), and
-    resume from the newest copied save; without one, start from the converted reference.
-  --skip-download: ``prepare`` converts the checkpoint already at ``--hf-checkpoint``, without downloading.
-  --mlflow-experiment: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is set);
-    --mlflow-run-id logs into an existing run, such as the AIR job's.
+  --prompt-data / --enable-eval: the training prompts, and the AIME-2024 eval every 20 steps.
+  --save-interval / --save-hf: full-state saves every N steps, each with a drop-in HF checkpoint.
+  --persist-dir: save locally, copy every save there in the background (tools/air/publisher.py), and resume from
+    the newest copied save; without one, start from the converted reference.
+  --skip-download: ``prepare`` converts the checkpoint already at ``--hf-checkpoint``, without downloading it.
+  --mlflow-experiment / --mlflow-run-id: log to Databricks MLflow as well as wandb (if WANDB_API_KEY is set).
 
 Examples:
   python scripts/run_glm5_3_flash.py prepare
@@ -39,7 +33,6 @@ import shlex
 from dataclasses import dataclass, field
 
 import typer
-from examples.glm5_3_flash.officeqa.settings import agent_env
 
 import miles.utils.external_utils.command_utils as U
 
@@ -48,10 +41,7 @@ app = typer.Typer()
 _HF_REPO = "zai-org/GLM-5.3-Flash"
 _HF_REVISION = "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a"
 _MODEL_TYPE = "glm5.3-flash"
-
-
-# The trainer's layout: TP1, CP8, PP4 (11/11/11/12 layers), EP8 on four 8-GPU nodes. Every other
-# node serves the policy as one 8-GPU SGLang engine.
+# The trainer's layout: TP1, CP8, PP4 (11/11/11/12 layers), EP8 on four 8-GPU nodes.
 _TP, _CP, _PP, _EP = 1, 8, 4, 8
 _FIRST_STAGE_LAYERS, _LAST_STAGE_LAYERS = 11, 12
 _TRAIN_GPUS = 32
@@ -86,22 +76,19 @@ class ScriptArgs(U.ExecuteTrainConfig):
     # prepare: convert the HF checkpoint already at hf_checkpoint (for example one staged from a Volume).
     skip_download: bool = False
     prompt_data: str | None = None
-    num_rollout: int = 100
-    seq_length: int = 150000
-    # Tokens per model turn; the episode as a whole is bounded by seq_length.
-    rollout_max_response_len: int = 16384
-    rollout_batch_size: int = 8
+    enable_eval: bool = True
+    num_rollout: int = 3000
+    seq_length: int = 32768
+    rollout_max_response_len: int = 8192
+    rollout_batch_size: int = 32
     n_samples_per_prompt: int = 8
     rollout_temperature: float = 1.0
     max_weight_staleness: int = 16
-    async_max_concurrent_samples: int = 480
-    async_max_prompt_attempts: int = 3
-    async_retry_backoff_s: float = 2.0
-    async_no_progress_timeout_s: float = 3000.0
-    sglang_max_running_requests: int = 96
+    async_max_concurrent_samples: int = 512
+    sglang_max_running_requests: int = 128
     sglang_mem_fraction_static: float = 0.7
     skip_saving: bool = False
-    save_interval: int = 10
+    save_interval: int = 20
     save_hf: bool = False
     persist_dir: str | None = None
     mlflow_experiment: str | None = None
@@ -118,7 +105,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
         if self.hf_checkpoint is None:
             self.hf_checkpoint = f"{self.model_dir}/GLM-5.3-Flash"
         if self.prompt_data is None:
-            self.prompt_data = f"{self.data_dir}/officeqa/train.jsonl"
+            self.prompt_data = f"{self.data_dir}/dapo-math-17k/dapo-math-17k.jsonl"
         self._validate()
 
     def _validate(self) -> None:
@@ -138,8 +125,6 @@ class ScriptArgs(U.ExecuteTrainConfig):
             raise ValueError("--save-hf writes its export inside a save")
         if self.save_interval <= 0 or self.max_weight_staleness < 0:
             raise ValueError("the save interval must be positive and the staleness cap nonnegative")
-        if not 0 < self.sglang_mem_fraction_static < 1:
-            raise ValueError("SGLang's static memory fraction must be in (0, 1)")
 
 
 def _checkpoint_args(args: ScriptArgs) -> list[str]:
@@ -166,7 +151,7 @@ def _checkpoint_args(args: ScriptArgs) -> list[str]:
             "--save-hf",
             f"{args.output_dir}/checkpoints/iter_{{rollout_id:07d}}/hf",
             "--save-hf-layout-path",
-            "examples.glm5_3_flash.hf_export.base_layout",
+            "miles.backends.megatron_utils.hf_base_layout.base_layout",
         ]
     return flags
 
@@ -183,9 +168,10 @@ def _rollout_args(args: ScriptArgs) -> list[str]:
         "prompt",
         "--label-key",
         "label",
-        "--metadata-key",
-        "metadata",
+        "--apply-chat-template",
         "--rollout-shuffle",
+        "--rm-type",
+        "deepscaler",
         "--num-rollout",
         str(args.num_rollout),
         "--rollout-batch-size",
@@ -198,18 +184,28 @@ def _rollout_args(args: ScriptArgs) -> list[str]:
         "1",
         "--rollout-temperature",
         str(args.rollout_temperature),
-        "--rollout-top-p",
-        "1.0",
-        "--rollout-top-k",
-        "-1",
-        "--rollout-max-context-len",
-        str(args.seq_length),
-        "--rollout-max-prompt-len",
-        str(args.seq_length - 1),
         "--rollout-max-response-len",
         str(args.rollout_max_response_len),
-        "--data-source-path",
-        "examples.glm5_3_flash.officeqa.curriculum.CurriculumDataSource",
+    ]
+
+
+def _eval_args(args: ScriptArgs) -> list[str]:
+    if not args.enable_eval:
+        return []
+    return [
+        "--eval-interval",
+        "20",
+        "--eval-prompt-data",
+        "aime24",
+        f"{args.data_dir}/aime-2024/aime-2024.jsonl",
+        "--n-samples-per-eval-prompt",
+        "16",
+        "--eval-max-response-len",
+        "16384",
+        "--eval-temperature",
+        "0.6",
+        "--eval-top-p",
+        "0.95",
     ]
 
 
@@ -223,8 +219,9 @@ def _placement_args(args: ScriptArgs) -> list[str]:
         str(args.num_gpus_per_node),
         "--rollout-num-gpus",
         str(args.rollout_gpus),
+        # In-flight requests keep their routes through a weight update, which routing replay (R3) relies on.
         "--pause-generation-mode",
-        "retract",
+        "in_place",
         "--update-weight-transfer-mode",
         "broadcast",
         "--update-weights-interval",
@@ -234,12 +231,6 @@ def _placement_args(args: ScriptArgs) -> list[str]:
         str(args.max_weight_staleness),
         "--async-max-concurrent-samples",
         str(args.async_max_concurrent_samples),
-        "--async-max-prompt-attempts",
-        str(args.async_max_prompt_attempts),
-        "--async-retry-backoff-s",
-        str(args.async_retry_backoff_s),
-        "--async-no-progress-timeout-s",
-        str(args.async_no_progress_timeout_s),
     ]
 
 
@@ -309,9 +300,6 @@ def _algorithm_args() -> list[str]:
         "2.0",
         "--dynamic-sampling-filter-path",
         "miles.rollout.filter_hub.common_filters.apply_reward_nonzero_std_filter",
-        # Center group rewards without dividing by their spread (Dr. GRPO), so a group that differs
-        # only by the judge's graded score does not get the push of a right-versus-wrong group.
-        "--disable-grpo-std-normalization",
     ]
 
 
@@ -346,13 +334,14 @@ def _sglang_args(args: ScriptArgs) -> list[str]:
         str(args.sglang_max_running_requests),
         "--sglang-mem-fraction-static",
         str(args.sglang_mem_fraction_static),
+        "--sglang-kv-cache-dtype",
+        "bfloat16",
+        # GLM-5.3's sparse attention (DSA) runs on TileLang. Routing replay needs a MoE backend that reports
+        # the experts it routed to.
         "--sglang-dsa-prefill-backend",
         "tilelang",
         "--sglang-dsa-decode-backend",
         "tilelang",
-        "--sglang-kv-cache-dtype",
-        "bfloat16",
-        # Routing replay (R3) needs a MoE backend that reports the experts it routed to.
         "--sglang-moe-runner-backend",
         "triton",
         "--router-health-success-threshold",
@@ -361,52 +350,18 @@ def _sglang_args(args: ScriptArgs) -> list[str]:
         "15",
         "--router-health-failure-threshold",
         "40",
-        "--sglang-tool-call-parser",
-        "glm47",
-        "--sglang-reasoning-parser",
-        "glm45",
-    ]
-
-
-def _agentic_args(args: ScriptArgs) -> list[str]:
-    return [
-        "--custom-generate-function-path",
-        "miles.rollout.generate_hub.agentic_tool_call.generate",
-        "--custom-agent-function-path",
-        "examples.glm5_3_flash.agent.run",
-        "--custom-rm-path",
-        "examples.glm5_3_flash.reward.reward_func",
-        "--use-session-server",
-        # Each worker assembles its sessions' samples on one event loop; at 480 sessions in flight,
-        # 32 workers left long episodes waiting past their collect deadline.
-        "--session-server-workers",
-        "64",
-        "--tito-model",
-        "glm53",
-        "--session-addition-r3-on-retract",
-        "--session-capture-provenance",
-        "--max-seq-len",
-        str(args.seq_length),
-        "--agentic-abort-on-agent-error",
-        "--async-unused-samples-handler",
-        "retry",
     ]
 
 
 def _tracking_args(args: ScriptArgs) -> list[str]:
     flags = shlex.split(U.get_default_wandb_args(__file__, run_id=args.run_id))
+    if args.mlflow_experiment is None and args.mlflow_run_id is None:
+        return flags
+    flags += ["--use-mlflow", "--mlflow-tracking-uri", "databricks", "--mlflow-run-name", args.run_id]
     if args.mlflow_experiment is not None:
-        flags += [
-            "--use-mlflow",
-            "--mlflow-tracking-uri",
-            "databricks",
-            "--mlflow-experiment-name",
-            args.mlflow_experiment,
-            "--mlflow-run-name",
-            args.run_id,
-        ]
-        if args.mlflow_run_id is not None:
-            flags += ["--mlflow-run-id", args.mlflow_run_id]
+        flags += ["--mlflow-experiment-name", args.mlflow_experiment]
+    if args.mlflow_run_id is not None:
+        flags += ["--mlflow-run-id", args.mlflow_run_id]
     return flags
 
 
@@ -441,17 +396,9 @@ def _env_vars(args: ScriptArgs) -> dict[str, str]:
         "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
         "TORCHINDUCTOR_COMPILE_THREADS": "1",
         "MILES_RUN_ID": args.run_id,
-        **agent_env(args.data_dir),
         **({"MILES_PERSIST_DIR": args.persist_dir} if args.persist_dir is not None else {}),
     }
-    for key in (
-        "TRITON_CACHE_DIR",
-        "TORCHINDUCTOR_CACHE_DIR",
-        "MLFLOW_RUN_ID",
-        "MILES_ATTEMPT_ID",
-        "DATABRICKS_HOST",
-        "DATABRICKS_TOKEN",
-    ):
+    for key in ("TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "MLFLOW_RUN_ID", "MILES_ATTEMPT_ID"):
         if value := os.environ.get(key):
             values[key] = value
     return values
@@ -461,12 +408,12 @@ def _train_args(args: ScriptArgs) -> list[str]:
     blocks = (
         _checkpoint_args(args),
         _rollout_args(args),
+        _eval_args(args),
         _placement_args(args),
         _parallel_args(args),
         _algorithm_args(),
         _optimizer_args(),
         _sglang_args(args),
-        _agentic_args(args),
         _tracking_args(args),
         _misc_args(),
         shlex.split(args.extra_args),
@@ -491,6 +438,8 @@ def _prepare(args: ScriptArgs) -> None:
     U.exec_command_cpu(f"mkdir -p {args.model_dir} {args.ckpt_dir} {args.data_dir}")
     if not args.skip_download:
         U.exec_command_cpu(f"hf download {_HF_REPO} --revision {_HF_REVISION} --local-dir {args.hf_checkpoint}")
+    U.hf_download_dataset("zhuzilin/dapo-math-17k", data_dir=args.data_dir)
+    U.hf_download_dataset("zhuzilin/aime-2024", data_dir=args.data_dir)
     os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     U.convert_checkpoint(
         model_name=_MODEL_TYPE,
@@ -506,7 +455,7 @@ def _prepare(args: ScriptArgs) -> None:
 @app.command()
 @U.dataclass_cli
 def prepare(args: ScriptArgs) -> None:
-    """Download the HF checkpoint and convert it to torch_dist."""
+    """Download the HF checkpoint and the datasets, and convert the checkpoint to torch_dist."""
     _prepare(args)
 
 

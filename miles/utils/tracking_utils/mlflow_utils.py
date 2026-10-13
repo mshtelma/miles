@@ -84,6 +84,9 @@ def _init_mlflow_primary(args, experiment_name: str) -> None:
 
     if args.mlflow_run_id is not None:
         tags["miles.requested_experiment"] = experiment_name
+        # start_run ignores run_name when it resumes an existing run; the tag renames it.
+        if run_name:
+            tags["mlflow.runName"] = run_name
     run = mlflow.start_run(run_id=args.mlflow_run_id, run_name=run_name, tags=tags)
     mlflow.log_params(_compute_config_for_logging(args))
 

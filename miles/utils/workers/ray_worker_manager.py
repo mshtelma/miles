@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 # TODO: unique name, maybe with args.run_uuid
 _ACTOR_NAME = "ray_worker_manager"
+_DEATH_PROBE_TIMEOUT_SECONDS = 10.0
 
 
 class RayWorkerManager:
@@ -74,6 +75,12 @@ class RayWorkerManager:
 
     async def stop_cells(self, cell_ids: list[str]) -> None:
         await asyncio.gather(*[self._find_cell(cell_id).stop() for cell_id in cell_ids])
+
+    async def find_dead_cells(self, cell_ids: list[str]) -> list[str]:
+        """The cells among ``cell_ids`` with a worker that Ray reports dead."""
+        cells = [self._find_cell(cell_id) for cell_id in cell_ids]
+        dead = await asyncio.gather(*[_has_dead_actor(cell) for cell in cells])
+        return [cell.cell_id for cell, is_dead in zip(cells, dead, strict=True) if is_dead]
 
     def inject_fault(self, cell_id: str, *, mode: str, worker_in_cell_index: int) -> None:
         cell = self._find_cell(cell_id)
@@ -407,6 +414,11 @@ def _route_method_to_concurrency_group(method: Callable, *, group: str) -> Calla
         return method(self, *args, **kwargs)
 
     return ray.method(concurrency_group=group)(routed)
+
+
+async def _has_dead_actor(cell: _CellManager) -> bool:
+    handles = [RayWorkerHandle(actor.actor_handle) for actor in cell.actors or [] if actor.actor_handle is not None]
+    return any(await asyncio.gather(*[handle.is_dead(timeout=_DEATH_PROBE_TIMEOUT_SECONDS) for handle in handles]))
 
 
 async def _gather_or_raise(coros: list[Coroutine[Any, Any, None]]) -> None:

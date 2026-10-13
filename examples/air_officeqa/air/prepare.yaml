@@ -1,0 +1,37 @@
+# Build the OfficeQA data from the databricks/officeqa dataset, download MODEL_NAME's pinned HF checkpoint and
+# convert it to torch_dist; copy all three to the Volume. The torch_dist tracker is copied last, so a partial
+# copy is never loaded.
+experiment_name: air-officeqa
+mlflow_run_name: prepare
+compute:
+  num_accelerators: 8
+  accelerator_type: GPU_8xB300
+environment:
+  docker_image:
+    url: REGISTRY/miles-air@sha256:DIGEST
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..  # relative to this YAML
+max_retries: 0  # a failed attempt would fail the same way; AIR's default is 3
+timeout_minutes: 360
+env_variables:
+  VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
+  MODEL_NAME: GLM-5.3-Flash  # or Qwen3.5-35B-A3B on GPU_8xH100 (../models.py)
+secrets:
+  HF_TOKEN: SCOPE/KEY  # a Hugging Face token whose account accepted the databricks/officeqa terms
+command: |
+  set -euo pipefail
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH:/root/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}"
+  test "$NUM_NODES" -eq 1
+  export HF_HUB_DISABLE_XET=1
+  LOCAL=/tmp/miles-air
+  python -m examples.air_officeqa.prepare_data --out-dir "$LOCAL/data/officeqa"
+  python examples/air_officeqa/run_officeqa.py prepare --model-name "$MODEL_NAME" --model-dir "$LOCAL/models" \
+    --ckpt-dir "$LOCAL/ckpt" --data-dir "$LOCAL/data"
+  python -m tools.air.copy_tree "$LOCAL/data/officeqa" "$VOLUME_ROOT/data/officeqa"
+  python -m tools.air.copy_tree "$LOCAL/models/$MODEL_NAME" "$VOLUME_ROOT/models/$MODEL_NAME"
+  TORCH_DIST=$(basename "$LOCAL"/ckpt/*_torch_dist)  # the one conversion prepare wrote
+  python -m tools.air.copy_tree "$LOCAL/ckpt/$TORCH_DIST" "$VOLUME_ROOT/ckpt/$TORCH_DIST" \
+    --last latest_checkpointed_iteration.txt

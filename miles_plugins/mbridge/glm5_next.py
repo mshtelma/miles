@@ -9,9 +9,9 @@ from mbridge.models import DeepseekV3Bridge
 from mbridge.models.ext.deepseek_v3.dequant_fp8_safetensor_io import DequantFP8SafeTensorIO
 from mbridge.models.ext.deepseek_v3.kernel import weight_dequant
 from miles_plugins.mbridge.deepseek_v32 import GlmMoeDsaBridge
+from miles_plugins.mbridge.linear_attn_layout import SkipLinearAttnLayoutMarker
 
 _GLM5_NEXT_VOCAB_SIZE = 154880
-_KDA_LAYOUT_VERSION_SUFFIX = ".self_attention.linear_attn.weight_layout_version"
 
 _HC_ALPHA_SLICES = {
     "alpha_pre": slice(0, 1),
@@ -58,7 +58,7 @@ class Glm5NextFP8SafeTensorIO(DequantFP8SafeTensorIO):
 
 
 @register_model("glm5_next")
-class Glm5NextBridge(GlmMoeDsaBridge):
+class Glm5NextBridge(SkipLinearAttnLayoutMarker, GlmMoeDsaBridge):
     _KDA_MAPPING = {
         f"self_attention.linear_attn.{weight_name}": ["model.layers.{layer_number}.self_attn." + weight_name]
         for weight_name in [
@@ -152,14 +152,6 @@ class Glm5NextBridge(GlmMoeDsaBridge):
         if name.startswith("model.") and not name.startswith(("model.language_model.", "model.visual.")):
             return "model.language_model." + name[len("model.") :]
         return name
-
-    def _weight_name_mapping_mcore_local_to_global(self, model, consider_ep: bool = True) -> dict[str, str]:
-        mapping = super()._weight_name_mapping_mcore_local_to_global(model, consider_ep=consider_ep)
-        return {
-            local_name: global_name
-            for local_name, global_name in mapping.items()
-            if not local_name.endswith(_KDA_LAYOUT_VERSION_SUFFIX)
-        }
 
     def _weight_name_mapping_mcore_to_hf(self, mcore_weights_name: str) -> list[str]:
         try:

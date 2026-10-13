@@ -5,13 +5,13 @@ from megatron.core.transformer.enums import AttnBackend
 from mbridge.core import register_model
 from mbridge.core.safetensor_io import SafeTensorIO
 from mbridge.models import DeepseekV3Bridge
-
+from miles_plugins.mbridge.linear_attn_layout import SkipLinearAttnLayoutMarker
 from miles_plugins.models.kimi_k3.model import build_kimi_k3_spec
 from miles_plugins.models.kimi_k3.ops import situ_and_mul
 
 
 @register_model("kimi_k3")
-class KimiK3Bridge(DeepseekV3Bridge):
+class KimiK3Bridge(SkipLinearAttnLayoutMarker, DeepseekV3Bridge):
     TransformerConfigClass = MLATransformerConfig
 
     _CONFIG_MAPPING = {

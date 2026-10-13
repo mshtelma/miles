@@ -370,3 +370,23 @@ class TestWorkerDeathOnRealRay:
             assert time.monotonic() < deadline, "the actor of a dead command is still alive"
             await asyncio.sleep(0.5)
         assert await asyncio.wait_for(infos[1].handle._get_node_ip(), timeout=30)
+
+    async def test_the_manager_names_exactly_the_cell_whose_command_died(self, manager_factory, worker_probe_factory):
+        """A dead engine never becomes ready, so the controller asks the manager instead of waiting for it."""
+        probe = worker_probe_factory()
+        manager_factory([make_command_spec("engine", num_cells=2, launch_command=probe.launch_command)])
+        probe.wait_for_records(2)
+        manager = RayWorkerManager.get_handle()
+        assert await manager.find_dead_cells.remote(["engine-0", "engine-1"]) == []
+
+        infos = ray.get(manager.get_worker_infos.remote("engine-1"))
+        try:
+            await infos[0].handle.kill_subprocess()
+        except WorkerUnreachableError:
+            pass
+
+        deadline = time.monotonic() + 60
+        while (dead := await manager.find_dead_cells.remote(["engine-0", "engine-1"])) != ["engine-1"]:
+            assert dead == [], dead
+            assert time.monotonic() < deadline, "the manager never saw the dead cell"
+            await asyncio.sleep(0.5)

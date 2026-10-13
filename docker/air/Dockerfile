@@ -108,3 +108,8 @@ RUN --mount=type=secret,id=host_ca,target=/run/secrets/host_ca,required=true \
 
 RUN sed -i '1c#!/opt/venv/bin/python' /opt/venv/bin/ray /opt/venv/bin/torchrun /opt/venv/bin/hf && \
     python -m pip check
+
+# On Hopper, FlashInfer compiles its attention kernels at run time, and they include the cuRAND headers that
+# the CUDA packages above leave out. PyTorch's nvidia-curand wheel has them, at the toolkit's version.
+RUN ln -s /opt/venv/lib/python3.12/site-packages/nvidia/cu13/include/curand*.h /usr/local/cuda/include/ && \
+    test -e /usr/local/cuda/include/curand_kernel.h

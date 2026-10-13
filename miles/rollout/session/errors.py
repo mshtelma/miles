@@ -35,7 +35,7 @@ class MessageValidationError(SessionError):
 
 
 class ContextBudgetExhausted(SessionError):
-    """Exact TITO input leaves no room for another generated token."""
+    """The session's token input already fills the context, leaving no room to generate."""
 
     status_code: int = 422
     code: str = "context_budget_exhausted"

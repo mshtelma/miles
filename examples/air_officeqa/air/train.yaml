@@ -1,0 +1,45 @@
+# Train MODEL_NAME: GLM-5.3-Flash on eight B300 nodes, or Qwen3.5-35B-A3B on three H100 nodes
+# (compute.num_accelerators=24 compute.accelerator_type=GPU_8xH100). Saves are copied to
+# runs/<RUN_ID>/checkpoints, and resubmitting the same RUN_ID resumes from the newest one.
+experiment_name: air-officeqa
+compute:
+  num_accelerators: 64
+  accelerator_type: GPU_8xB300
+environment:
+  docker_image:
+    url: REGISTRY/miles-air@sha256:DIGEST
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..  # relative to this YAML
+max_retries: 0  # a failed attempt would fail the same way; AIR's default is 3
+timeout_minutes: 2880  # including the wait for GPUs
+env_variables:
+  VOLUME_ROOT: /Volumes/CATALOG/SCHEMA/VOLUME/miles
+  RUN_ID: air-officeqa
+  MODEL_NAME: GLM-5.3-Flash  # or Qwen3.5-35B-A3B on GPU_8xH100 (../models.py)
+  TRAIN_ARGS: --save-hf
+command: |
+  set -euo pipefail
+  cd "$CODE_SOURCE_PATH"
+  export PYTHONPATH="$CODE_SOURCE_PATH:/root/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}"
+  export HF_HUB_DISABLE_XET=1 PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 MILES_ATTEMPT_ID="$MLFLOW_RUN_ID"
+  LOCAL=/tmp/miles-air RUN="$VOLUME_ROOT/runs/$RUN_ID"
+  # Every node serves or trains from its own disk.
+  python -m tools.air.copy_tree "$VOLUME_ROOT/models/$MODEL_NAME" "$LOCAL/models/$MODEL_NAME"
+  python -m tools.air.copy_tree "$VOLUME_ROOT/data/officeqa" "$LOCAL/data/officeqa"
+  if [ "$NODE_RANK" -ne 0 ]; then
+    for _ in $(seq 360); do (exec 3<>"/dev/tcp/$MASTER_ADDR/6379") 2>/dev/null && break; sleep 5; done
+    ray start --address="$MASTER_ADDR:6379" --num-gpus="$LOCAL_WORLD_SIZE" --disable-usage-stats --block || true
+    exit 0  # the head node's exit code decides the job
+  fi
+  ray start --head --node-ip-address="$MASTER_ADDR" --port=6379 --num-gpus="$LOCAL_WORLD_SIZE" \
+    --disable-usage-stats --dashboard-host=127.0.0.1
+  eval "set -- $TRAIN_ARGS"
+  set +e
+  MILES_SCRIPT_EXTERNAL_RAY=1 python examples/air_officeqa/run_officeqa.py train --model-name "$MODEL_NAME" --run-id "$RUN_ID" \
+    --num-nodes "$NUM_NODES" --output-dir "$LOCAL/run" --model-dir "$LOCAL/models" --data-dir "$LOCAL/data" \
+    --ckpt-dir "$VOLUME_ROOT/ckpt" --persist-dir "$RUN/checkpoints" --mlflow-run-id "$MLFLOW_RUN_ID" "$@"
+  code=$?
+  ray stop --force
+  exit "$code"

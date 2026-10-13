@@ -7,6 +7,16 @@ hf download zai-org/GLM-5.3-Flash
   --local-dir /root/models/GLM-5.3-Flash
 
 ### 2
+hf download
+  --repo-type dataset zhuzilin/dapo-math-17k
+  --local-dir /root/datasets/dapo-math-17k
+
+### 3
+hf download
+  --repo-type dataset zhuzilin/aime-2024
+  --local-dir /root/datasets/aime-2024
+
+### 4
 PYTHONPATH=<REPO_ROOT>:/root/Megatron-LM:/frozen/pythonpath torchrun
   --nproc-per-node 8 <REPO_ROOT>/tools/convert_hf_to_torch_dist.py
   --spec miles_plugins.models.glm5_next.glm5_next get_glm5_next_spec

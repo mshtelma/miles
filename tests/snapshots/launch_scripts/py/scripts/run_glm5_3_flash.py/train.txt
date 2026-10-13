@@ -15,7 +15,7 @@ nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l
 ### 3
 [launcher lifetime] ray job submit
   --address=http://127.0.0.1:8265
-  --runtime-env-json='{"env_vars": {"PYTHONUNBUFFERED": "1", "CUDA_DEVICE_MAX_CONNECTIONS": "1", "NCCL_NVLS_ENABLE": "0", "no_proxy": "127.0.0.1,127.0.0.1", "MASTER_ADDR": "127.0.0.1", "SGLANG_HEALTH_CHECK_TIMEOUT": "120", "SGLANG_RETURN_ORIGINAL_LOGPROB": "0", "PYTHONPATH": "<REPO_ROOT>:/root/Megatron-LM:/frozen/pythonpath", "TORCHINDUCTOR_COMPILE_THREADS": "1", "MILES_RUN_ID": "260101-000000-000", "MILES_TOOL_EXECUTOR": "examples.glm5_3_flash.officeqa.adapters:run_tool", "MILES_REWARD_FN": "examples.glm5_3_flash.officeqa.path_reward:score", "MILES_AGENT_SETTINGS": "{\"max_turns\":128,\"terminal_tools\":[\"submit_report\"],\"reserve_tokens\":16384,\"score_timeout_s\":1200}", "OFFICEQA_DATA_ROOT": "/root/datasets"}}'
+  --runtime-env-json='{"env_vars": {"PYTHONUNBUFFERED": "1", "CUDA_DEVICE_MAX_CONNECTIONS": "1", "NCCL_NVLS_ENABLE": "0", "no_proxy": "127.0.0.1,127.0.0.1", "MASTER_ADDR": "127.0.0.1", "SGLANG_HEALTH_CHECK_TIMEOUT": "120", "SGLANG_RETURN_ORIGINAL_LOGPROB": "0", "PYTHONPATH": "<REPO_ROOT>:/root/Megatron-LM:/frozen/pythonpath", "TORCHINDUCTOR_COMPILE_THREADS": "1", "MILES_RUN_ID": "260101-000000-000"}}'
   -- python3 <REPO_ROOT>/train_async.py
   --spec miles_plugins.models.glm5_next.glm5_next get_glm5_next_spec
   --num-layers 45
@@ -62,44 +62,43 @@ nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l
   --check-weight-update-equal
   --check-weight-update-skip-list visual. mlp.experts.
   --save /root/shared_data/checkpoints
-  --save-interval 10
-  --prompt-data /root/datasets/officeqa/train.jsonl
+  --save-interval 20
+  --prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl
   --input-key prompt
   --label-key label
-  --metadata-key metadata
+  --apply-chat-template
   --rollout-shuffle
-  --num-rollout 100
-  --rollout-batch-size 8
+  --rm-type deepscaler
+  --num-rollout 3000
+  --rollout-batch-size 32
   --n-samples-per-prompt 8
-  --global-batch-size 64
+  --global-batch-size 256
   --num-steps-per-rollout 1
   --rollout-temperature 1.0
-  --rollout-top-p 1.0
-  --rollout-top-k -1
-  --rollout-max-context-len 150000
-  --rollout-max-prompt-len 149999
-  --rollout-max-response-len 16384
-  --data-source-path examples.glm5_3_flash.officeqa.curriculum.CurriculumDataSource
+  --rollout-max-response-len 8192
+  --eval-interval 20
+  --eval-prompt-data aime24 /root/datasets/aime-2024/aime-2024.jsonl
+  --n-samples-per-eval-prompt 16
+  --eval-max-response-len 16384
+  --eval-temperature 0.6
+  --eval-top-p 0.95
   --actor-num-nodes 4
   --actor-num-gpus-per-node 8
   --num-gpus-per-node 8
   --rollout-num-gpus 32
-  --pause-generation-mode retract
+  --pause-generation-mode in_place
   --update-weight-transfer-mode broadcast
   --update-weights-interval 1
   --fully-async
   --max-weight-staleness 16
-  --async-max-concurrent-samples 480
-  --async-max-prompt-attempts 3
-  --async-retry-backoff-s 2.0
-  --async-no-progress-timeout-s 3000.0
-  --seq-length 150000
+  --async-max-concurrent-samples 512
+  --seq-length 32768
   --tensor-model-parallel-size 1
   --context-parallel-size 8
   --pipeline-model-parallel-size 4
   --expert-model-parallel-size 8
   --expert-tensor-parallel-size 1
-  --max-tokens-per-gpu 19456
+  --max-tokens-per-gpu 4096
   --use-dynamic-batch-size
   --recompute-granularity full
   --recompute-method uniform
@@ -125,7 +124,6 @@ nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l
   --tis-clip-low 0
   --tis-clip 2.0
   --dynamic-sampling-filter-path miles.rollout.filter_hub.common_filters.apply_reward_nonzero_std_filter
-  --disable-grpo-std-normalization
   --optimizer adam
   --lr 1e-6
   --lr-decay-style constant
@@ -136,28 +134,15 @@ nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l
   --sglang-tp-size 8
   --sglang-ep-size 8
   --sglang-chunked-prefill-size 8192
-  --sglang-max-running-requests 96
+  --sglang-max-running-requests 128
   --sglang-mem-fraction-static 0.7
+  --sglang-kv-cache-dtype bfloat16
   --sglang-dsa-prefill-backend tilelang
   --sglang-dsa-decode-backend tilelang
-  --sglang-kv-cache-dtype bfloat16
   --sglang-moe-runner-backend triton
   --router-health-success-threshold 1
   --router-health-check-interval-secs 15
   --router-health-failure-threshold 40
-  --sglang-tool-call-parser glm47
-  --sglang-reasoning-parser glm45
-  --custom-generate-function-path miles.rollout.generate_hub.agentic_tool_call.generate
-  --custom-agent-function-path examples.glm5_3_flash.agent.run
-  --custom-rm-path examples.glm5_3_flash.reward.reward_func
-  --use-session-server
-  --session-server-workers 64
-  --tito-model glm53
-  --session-addition-r3-on-retract
-  --session-capture-provenance
-  --max-seq-len 150000
-  --agentic-abort-on-agent-error
-  --async-unused-samples-handler retry
   --use-wandb
   --wandb-project miles-run_glm5_3_flash
   --wandb-group 260101-000000-000

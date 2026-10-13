@@ -7,12 +7,13 @@ from miles.backends.megatron_utils.megatron_to_hf.gdn_layout import (
     qkv_flat_to_group_major,
     qkv_group_major_to_flat,
 )
+from miles_plugins.mbridge.linear_attn_layout import SkipLinearAttnLayoutMarker
 
 _GDN_CONV = "self_attention.linear_attn.conv1d.weight"
 
 
 @register_model("qwen3_next")
-class Qwen3NextBridge(Qwen2MoEBridge):
+class Qwen3NextBridge(SkipLinearAttnLayoutMarker, Qwen2MoEBridge):
     _ATTENTION_MAPPING = (
         Qwen2MoEBridge._ATTENTION_MAPPING
         | {

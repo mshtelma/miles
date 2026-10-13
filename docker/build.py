@@ -83,7 +83,7 @@ VARIANTS = {
             "TE_USE_WHEEL": "1",
         },
     },
-    # GLM-5.3-Flash on the Databricks AI Runtime (examples/glm5_3_flash/officeqa/air). Its downloads
+    # GLM-5.3-Flash on the Databricks AI Runtime (examples/air_officeqa/air). Its downloads
     # trust the host's CA bundle; push it to your own registry with --image.
     "air-glm53": {
         "image": "miles-air",
